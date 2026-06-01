@@ -62,6 +62,14 @@ export interface PaymentRequest {
   paidBy?:       string
 }
 
+export interface InviteLink {
+  token:         string
+  creatorWallet: string
+  createdAt:     string
+  /** Number of times the invite URL has been opened. */
+  uses:          number
+}
+
 export interface MemePosition {
   id:            string
   wallet:        string
@@ -82,6 +90,7 @@ interface StoreData {
   conditions: Condition[]
   payments:   PaymentRequest[]
   positions:  MemePosition[]
+  invites:    InviteLink[]
 }
 
 /* ─── I/O ───────────────────────────────────────────────────────────────── */
@@ -89,11 +98,14 @@ interface StoreData {
 function load(): StoreData {
   try {
     if (!fs.existsSync(DATA_FILE)) {
-      return { scheduled: [], conditions: [], payments: [], positions: [] }
+      return { scheduled: [], conditions: [], payments: [], positions: [], invites: [] }
     }
-    return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) as StoreData
+    const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) as StoreData
+    // Back-fill missing keys introduced in later versions
+    if (!data.invites) data.invites = []
+    return data
   } catch {
-    return { scheduled: [], conditions: [], payments: [], positions: [] }
+    return { scheduled: [], conditions: [], payments: [], positions: [], invites: [] }
   }
 }
 
@@ -221,4 +233,33 @@ export function closePosition(id: string, pnl: number): void {
   const store = load()
   const item  = store.positions.find(p => p.id === id)
   if (item) { item.status = 'closed'; item.closedAt = new Date().toISOString(); item.closedPnl = pnl; save(store) }
+}
+
+/* ─── Invite links ───────────────────────────────────────────────────────────── */
+
+export function createInviteLink(creatorWallet: string): InviteLink {
+  const store  = load()
+  const record: InviteLink = {
+    token: uuid(),
+    creatorWallet,
+    createdAt: new Date().toISOString(),
+    uses: 0,
+  }
+  store.invites.push(record)
+  save(store)
+  return record
+}
+
+export function getInviteLink(token: string): InviteLink | undefined {
+  return load().invites.find(i => i.token === token)
+}
+
+/** Increment the use counter and return the updated record. */
+export function touchInviteLink(token: string): InviteLink | undefined {
+  const store = load()
+  const item  = store.invites.find(i => i.token === token)
+  if (!item) return undefined
+  item.uses++
+  save(store)
+  return item
 }

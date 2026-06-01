@@ -9,6 +9,14 @@ import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from '@mysten/sui/jsonRpc'
 import type { ZkLoginSession, ZkProof } from '../types.js'
 
+/** Serialisable snapshot of the ephemeral keypair + nonce state — safe to put in sessionStorage. */
+export interface ZkEphemeralState {
+  /** Base-64 encoded 32-byte Ed25519 private key */
+  privKey:    string
+  randomness: string
+  maxEpoch:   number
+}
+
 const PROVER_URL = 'https://prover-dev.mystenlabs.com/v1'
 
 export interface ZkLoginProviderConfig {
@@ -135,6 +143,40 @@ export class ZkLoginAuth {
       maxEpoch: session.maxEpoch,
       userSignature: ephemeralSignature,
     })
+  }
+
+  /**
+   * Export the current ephemeral state so it can be persisted across an OAuth redirect.
+   * Save the result to sessionStorage before sending the user to the OAuth provider;
+   * restore it with `ZkLoginAuth.fromEphemeralState()` on the callback page.
+   */
+  exportEphemeralState(): ZkEphemeralState {
+    if (!this.ephemeralKeypair || !this.randomness) {
+      throw new Error('Call generateLoginUrl() before exportEphemeralState()')
+    }
+    return {
+      // getSecretKey() returns the Bech32-encoded private key string in @mysten/sui v2
+      privKey:    this.ephemeralKeypair.getSecretKey(),
+      randomness: this.randomness,
+      maxEpoch:   this.maxEpoch,
+    }
+  }
+
+  /**
+   * Reconstruct a `ZkLoginAuth` instance from a previously exported ephemeral state.
+   * Call this on the OAuth callback page before calling `handleCallback()`.
+   */
+  static fromEphemeralState(
+    network: 'mainnet' | 'testnet',
+    config:  ZkLoginProviderConfig,
+    state:   ZkEphemeralState,
+  ): ZkLoginAuth {
+    const auth = new ZkLoginAuth(network, config)
+    // fromSecretKey accepts the Bech32 string returned by getSecretKey()
+    auth.ephemeralKeypair = Ed25519Keypair.fromSecretKey(state.privKey as any)
+    auth.randomness       = state.randomness
+    auth.maxEpoch         = state.maxEpoch
+    return auth
   }
 
   // ─── Internal ──────────────────────────────────────────────────────────────

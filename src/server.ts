@@ -40,6 +40,7 @@ import {
   addScheduled, getScheduled, cancelScheduled, getAllScheduled, getScheduledById,
   addCondition, getConditions, cancelCondition,
   getPositions, addPosition, cancelCondition as removeCondition,
+  createInviteLink, getInviteLink, touchInviteLink,
 } from './db/store.js'
 import {
   getMemory, saveMemory, buildMemoryContext,
@@ -177,6 +178,37 @@ app.post('/api/intent', async (req, res) => {
     const { text, senderAddress } = req.body as { text: string; senderAddress?: string }
     const sender = senderAddress || SIM_ADDR
     if (!text?.trim()) { res.status(400).json({ ok: false, error: 'text is required' }); return }
+
+    // ── Fast-path: /onboard command — skip LLM parsing ──────────────────────
+    if (/^\/?onboard\b/i.test(text.trim())) {
+      const BASE = process.env.VEKTOR_URL ?? 'http://localhost:5173'
+      let inviteLink: string | null = null
+      if (sender !== SIM_ADDR) {
+        const invite = createInviteLink(sender)
+        inviteLink   = `${BASE}?invite=${invite.token}`
+      }
+      const msg = [
+        '**Welcome to Vektor** — your Financial OS for Sui.',
+        '',
+        'Here\'s what you can do:',
+        '• **Swap** — "swap 10 USDC for SUI"',
+        '• **Lend / borrow** — "deposit 5 SUI on NAVI" · "borrow 20 USDC"',
+        '• **Automate** — "DCA $50 into SUI every week"',
+        '• **Conditions** — "sell half my SUI if price drops below $2"',
+        '• **Portfolio** — "check my balance" · "analyse my wallet"',
+        '',
+        inviteLink ? `Share Vektor with a friend: \`${inviteLink}\`` : 'Connect your wallet to get started.',
+      ].join('\n')
+      res.json({
+        ok:          true,
+        intent_type: 'onboard',
+        language:    'en',
+        inviteLink,
+        message:     msg,
+        actionLabel: '· ONBOARD',
+      })
+      return
+    }
 
     // Load memory context for the user
     const memCtx  = sender !== SIM_ADDR ? buildMemoryContext(sender) : undefined
@@ -1113,6 +1145,24 @@ app.get('/api/conditions/:wallet', (req, res) => {
 app.delete('/api/conditions/:id', (req, res) => {
   const ok = cancelCondition(req.params.id)
   res.json({ ok })
+})
+
+/* ─── Onboarding ─────────────────────────────────────────────────────── */
+
+/** Create a shareable invite link for the calling wallet. */
+app.post('/api/onboard/link', (req, res) => {
+  const { creatorWallet } = req.body as { creatorWallet?: string }
+  if (!creatorWallet) { res.status(400).json({ ok: false, error: 'creatorWallet required' }); return }
+  const BASE   = process.env.VEKTOR_URL ?? 'http://localhost:5173'
+  const invite = createInviteLink(creatorWallet)
+  res.json({ ok: true, invite, link: `${BASE}?invite=${invite.token}` })
+})
+
+/** Resolve an invite token → creator info.  Called by WelcomePage on load. */
+app.get('/api/onboard/:token', (req, res) => {
+  const invite = touchInviteLink(req.params.token)
+  if (!invite) { res.status(404).json({ ok: false, error: 'Invite not found or expired' }); return }
+  res.json({ ok: true, invite: { creatorWallet: invite.creatorWallet, createdAt: invite.createdAt, uses: invite.uses } })
 })
 
 /* ─── Payments ───────────────────────────────────────────────────────── */
