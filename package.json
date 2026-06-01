@@ -41,7 +41,7 @@
     "navi-sdk": "^1.7.3",
     "node-cron": "^4.2.1",
     "openai": "^6.39.1",
-    "routex-sui": "github:Iwetan77/Routex",
+    "routex-sui": "^1.2.0",
     "uuid": "^11.1.0"
   },
   "devDependencies": {
