@@ -421,40 +421,48 @@ function BatchPaymentCard({ payload, onSign }: { payload: any; onSign?: () => vo
 }
 
 function TransactionHistoryCard({ txs }: { txs: any[] }) {
-  if (!txs || txs.length === 0) return null
   return (
     <div className="rounded-xl border border-white/5 bg-[#111118] p-5 space-y-3">
       <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500">Recent Transactions</p>
-      <div className="space-y-0">
-        {txs.slice(0, 8).map((tx: any, i: number) => (
-          <div key={i} className="flex items-center justify-between py-2.5 border-b border-white/5 last:border-0">
-            <div className="flex items-center gap-2.5">
-              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${tx.status === 'success' ? 'bg-emerald-400' : 'bg-red-400'}`} />
-              <span className="text-xs text-slate-400 font-mono">
-                {tx.digest ? `${tx.digest.slice(0, 8)}…${tx.digest.slice(-4)}` : 'unknown'}
-              </span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className={`text-[10px] font-mono ${tx.status === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
-                {tx.status}
-              </span>
-              <span className="text-[10px] text-slate-600">
-                {tx.timestamp ? new Date(tx.timestamp).toLocaleDateString() : ''}
-              </span>
-              {tx.digest && (
-                <a
-                  href={`https://suiscan.xyz/mainnet/tx/${tx.digest}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[10px] text-purple-400 hover:text-purple-300 transition-colors"
-                >
-                  ↗
-                </a>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
+      {(!txs || txs.length === 0) ? (
+        <p className="text-xs text-slate-600 py-2">No recent transactions found for this wallet.</p>
+      ) : (
+        <div className="space-y-0">
+          {txs.slice(0, 10).map((tx: any, i: number) => {
+            const digest    = typeof tx.digest === 'string' ? tx.digest : null
+            const status    = tx.status ?? 'unknown'
+            const isSuccess = status === 'success'
+            let dateStr = ''
+            try { if (tx.timestamp) dateStr = new Date(tx.timestamp).toLocaleDateString() } catch {}
+            return (
+              <div key={digest ?? i} className="flex items-center justify-between py-2.5 border-b border-white/5 last:border-0">
+                <div className="flex items-center gap-2.5">
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isSuccess ? 'bg-emerald-400' : 'bg-red-400'}`} />
+                  <span className="text-xs text-slate-400 font-mono">
+                    {digest ? `${digest.slice(0, 8)}…${digest.slice(-4)}` : 'unknown'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className={`text-[10px] font-mono ${isSuccess ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {status}
+                  </span>
+                  {dateStr && <span className="text-[10px] text-slate-600">{dateStr}</span>}
+                  {digest && (
+                    <a
+                      href={`https://suiscan.xyz/mainnet/tx/${digest}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[10px] text-purple-400 hover:text-purple-300 transition-colors"
+                    >
+                      ↗
+                    </a>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
