@@ -76,6 +76,31 @@ function bumpRegistry(field: 'total_transactions' | 'total_rewrites'): void {
 const app    = express()
 const PORT   = 3001
 
+// ── Routex factory with per-protocol timeouts ─────────────────────────────
+// routex.getQuote() fans out to 7 DEX protocols via Promise.allSettled with
+// no built-in timeout.  Cetus and Aftermath make heavy on-chain calls that
+// can hang for 30+ seconds.  We monkey-patch the public pool instances so
+// each slow protocol resolves to null after PROTOCOL_MS, letting fast ones
+// (FlowX, DeepBook) win without waiting.
+const PROTOCOL_MS = 5_000   // per-protocol deadline
+const QUOTE_MS    = 12_000  // hard ceiling on the whole getQuote call
+
+function createRoutex(network: 'mainnet', sender: string) {
+  const r = new Routex(network, sender)
+  const wrap = (pool: any) => {
+    if (!pool?.getQuote) return
+    const orig = pool.getQuote.bind(pool)
+    pool.getQuote = (...args: unknown[]) =>
+      Promise.race([
+        orig(...args),
+        new Promise<null>(resolve => setTimeout(() => resolve(null), PROTOCOL_MS)),
+      ])
+  }
+  // Only wrap the protocols known to be slow; DeepBook / FlowX / 7K are left unwrapped
+  ;[r.cetusPool, r.aftermathPool, r.turbosPool, r.hopPool].forEach(wrap)
+  return r
+}
+
 // Serialize BigInt values as strings so res.json() never throws
 app.set('json replacer', (_key: string, val: unknown) =>
   typeof val === 'bigint' ? val.toString() : val
@@ -832,14 +857,19 @@ app.post('/api/intent', async (req, res) => {
       const amount     = parsed.input_amount ?? 0
       const amountIn   = toBaseUnits(amount, fromToken)
 
-      const routex  = new Routex('mainnet', sender)
-      const quote   = await routex.getQuote({
-        from:              fromToken,
-        to:                memeToken,
-        amount:            amountIn,
-        slippageTolerance: parsed.constraints.max_slippage ?? 0.02, // higher for memecoins
-        senderAddress:     sender,
-      }).catch(() => ({ amountOut: 0, amountIn: Number(amountIn), priceImpact: 0.05, route: [], gasEstimate: 0, validUntil: Date.now() + 30000 }))
+      const routex  = createRoutex('mainnet', sender)
+      const quote   = await Promise.race([
+        routex.getQuote({
+          from:              fromToken,
+          to:                memeToken,
+          amount:            amountIn,
+          slippageTolerance: parsed.constraints.max_slippage ?? 0.02,
+          senderAddress:     sender,
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Quote timed out — try again in a moment.')), QUOTE_MS)
+        ),
+      ]).catch(() => ({ amountOut: 0n, amountIn, priceImpact: 0.05, route: [], gasEstimate: 0n, validUntil: Date.now() + 30_000 }))
 
       const quoteWithSym = { ...quote, fromSymbol: fromToken, toSymbol: memeToken }
       const report       = await runGuardian(quoteWithSym, sender, null, lang)
@@ -935,14 +965,12 @@ app.post('/api/intent', async (req, res) => {
       }
     }
 
-    const routex   = new Routex('mainnet', sender)
-
     // SEAL_V1.5 — encrypt intent here using Seal SDK before submission
     // Prevents front-running by keeping intent private until execution moment
     // Do not implement now. Reserved for v1.5.
 
-    const QUOTE_TIMEOUT_MS = 30_000
-    const quote = await Promise.race([
+    const routex = createRoutex('mainnet', sender)
+    const quote  = await Promise.race([
       routex.getQuote({
         from:              fromToken,
         to:                toToken,
@@ -951,7 +979,7 @@ app.post('/api/intent', async (req, res) => {
         senderAddress:     sender,
       }),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Quote timed out — DEX liquidity sources are slow. Please try again.')), QUOTE_TIMEOUT_MS)
+        setTimeout(() => reject(new Error('Quote timed out — try again in a moment.')), QUOTE_MS)
       ),
     ])
 
@@ -1244,7 +1272,7 @@ app.post('/api/execute-scheduled/:id', async (req, res) => {
     }
 
     const amountIn = toBaseUnits(amount, fromToken)
-    const routex   = new Routex('mainnet', sender)
+    const routex   = createRoutex('mainnet', sender)
     const quote    = await Promise.race([
       routex.getQuote({
         from:              fromToken,
@@ -1254,7 +1282,7 @@ app.post('/api/execute-scheduled/:id', async (req, res) => {
         senderAddress:     sender,
       }),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Quote timed out — DEX liquidity sources are slow. Please try again.')), 30_000)
+        setTimeout(() => reject(new Error('Quote timed out — try again in a moment.')), QUOTE_MS)
       ),
     ])
 
@@ -1297,7 +1325,7 @@ app.post('/api/ptb', async (req, res) => {
     if (!from || !to || !amountIn || !sender) {
       res.status(400).json({ ok: false, error: 'Missing required fields' }); return
     }
-    const routex = new Routex('mainnet', sender)
+    const routex = createRoutex('mainnet', sender)
     const quote  = await Promise.race([
       routex.getQuote({
         from,
@@ -1307,7 +1335,7 @@ app.post('/api/ptb', async (req, res) => {
         senderAddress:     sender,
       }),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Quote timed out — DEX liquidity sources are slow. Please try again.')), 30_000)
+        setTimeout(() => reject(new Error('Quote timed out — try again in a moment.')), QUOTE_MS)
       ),
     ])
 
