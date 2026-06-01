@@ -76,29 +76,13 @@ function bumpRegistry(field: 'total_transactions' | 'total_rewrites'): void {
 const app    = express()
 const PORT   = 3001
 
-// ── Routex factory with per-protocol timeouts ─────────────────────────────
-// routex.getQuote() fans out to 7 DEX protocols via Promise.allSettled with
-// no built-in timeout.  Cetus and Aftermath make heavy on-chain calls that
-// can hang for 30+ seconds.  We monkey-patch the public pool instances so
-// each slow protocol resolves to null after PROTOCOL_MS, letting fast ones
-// (FlowX, DeepBook) win without waiting.
-const PROTOCOL_MS = 5_000   // per-protocol deadline
-const QUOTE_MS    = 12_000  // hard ceiling on the whole getQuote call
+// Hard ceiling on the whole getQuote call. Individual protocol timeouts
+// (5 s each) are now built into routex-sui v1.1.2 via the safe() function
+// in PoolAggregator, so this outer race is just a final backstop.
+const QUOTE_MS = 12_000
 
 function createRoutex(network: 'mainnet', sender: string) {
-  const r = new Routex(network, sender)
-  const wrap = (pool: any) => {
-    if (!pool?.getQuote) return
-    const orig = pool.getQuote.bind(pool)
-    pool.getQuote = (...args: unknown[]) =>
-      Promise.race([
-        orig(...args),
-        new Promise<null>(resolve => setTimeout(() => resolve(null), PROTOCOL_MS)),
-      ])
-  }
-  // Only wrap the protocols known to be slow; DeepBook / FlowX / 7K are left unwrapped
-  ;[r.cetusPool, r.aftermathPool, r.turbosPool, r.hopPool].forEach(wrap)
-  return r
+  return new Routex(network, sender)
 }
 
 // Serialize BigInt values as strings so res.json() never throws
