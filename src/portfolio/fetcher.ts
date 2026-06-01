@@ -114,6 +114,65 @@ export interface RecentTx {
   status:    'success' | 'failure'
 }
 
+/**
+ * Fetch recent transactions for a wallet — both sent and received.
+ * Much faster than fetchPortfolio because it skips coin balances,
+ * prices, and NAVI positions.
+ */
+export async function fetchRecentTxs(wallet: string, limit = 20): Promise<RecentTx[]> {
+  const deadline = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('tx fetch timeout')), 8_000)
+  )
+
+  // Query both sent and received txs in parallel
+  const [sentResult, receivedResult] = await Promise.allSettled([
+    Promise.race([
+      client.queryTransactionBlocks({
+        filter:  { FromAddress: wallet },
+        options: { showEffects: true },
+        limit,
+        order:   'descending',
+      }),
+      deadline,
+    ]),
+    Promise.race([
+      client.queryTransactionBlocks({
+        filter:  { ToAddress: wallet },
+        options: { showEffects: true },
+        limit,
+        order:   'descending',
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('tx fetch timeout')), 8_000)
+      ),
+    ]),
+  ])
+
+  const sentData     = sentResult.status     === 'fulfilled' ? sentResult.value.data     : []
+  const receivedData = receivedResult.status === 'fulfilled' ? receivedResult.value.data : []
+
+  // Merge, deduplicate by digest, sort newest first
+  const seen = new Set<string>()
+  const all  = [...sentData, ...receivedData].filter(tx => {
+    if (seen.has(tx.digest)) return false
+    seen.add(tx.digest)
+    return true
+  })
+
+  all.sort((a, b) => {
+    const ta = Number((a as any).timestampMs ?? 0)
+    const tb = Number((b as any).timestampMs ?? 0)
+    return tb - ta
+  })
+
+  return all.slice(0, limit).map((tx: any) => ({
+    digest:    tx.digest,
+    timestamp: tx.timestampMs ? new Date(Number(tx.timestampMs)).toISOString() : '',
+    kind:      'transaction',
+    status:    tx.effects?.status?.status === 'success' ? 'success' : 'failure',
+  }))
+}
+
 /** Fetch coins with fast retry — up to 3 attempts with 300ms gaps. */
 async function fetchAllCoinsWithRetry(wallet: string) {
   for (let attempt = 0; attempt < 3; attempt++) {

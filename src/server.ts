@@ -31,7 +31,7 @@ import { walrusHealthCheck } from './walrus/client.js'
 import { parseIntent }          from './parser/intent.js'
 import { runGuardian }          from './guardian/v2.js'
 import { rewritePTB }           from './guardian/rewriter.js'
-import { fetchPortfolio, fetchTransaction, getTokenBalance } from './portfolio/fetcher.js'
+import { fetchPortfolio, fetchRecentTxs, fetchTransaction, getTokenBalance } from './portfolio/fetcher.js'
 import { getHealthFactor, getNaviPositions, getPoolRates,
          buildDepositPTB, buildBorrowPTB, buildRepayPTB } from './navi/client.js'
 import { explainTransaction }   from './explainer/index.js'
@@ -331,8 +331,7 @@ app.post('/api/intent', async (req, res) => {
     }
 
     if (intent === 'transaction_history') {
-      const portfolio = await fetchPortfolio(sender)
-      const txs = portfolio.recentTxs ?? []
+      const txs = await fetchRecentTxs(sender)
       if (txs.length === 0) {
         const msgEn = 'No recent transactions found for this wallet.'
         const message = lang === 'en' ? msgEn : await complete({
