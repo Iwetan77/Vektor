@@ -76,10 +76,10 @@ function bumpRegistry(field: 'total_transactions' | 'total_rewrites'): void {
 const app    = express()
 const PORT   = 3001
 
-// Hard ceiling on the whole getQuote call. Individual protocol timeouts
-// (5 s each) are now built into routex-sui v1.1.2 via the safe() function
-// in PoolAggregator, so this outer race is just a final backstop.
-const QUOTE_MS = 12_000
+// Hard ceiling on the whole getQuote call.
+// Worst-case: 5 s (direct, waiting for 7K) + 6 s hop cap, parallel = 6 s
+// pathfinder + 2 s gas estimate = ~8 s. 18 s gives 10 s of headroom.
+const QUOTE_MS = 18_000
 
 function createRoutex(network: 'mainnet', sender: string) {
   return new Routex(network, sender)
