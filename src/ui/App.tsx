@@ -1449,8 +1449,13 @@ export default function App() {
           ? { ...m, phase: 'rewritten' as const, actionLabel: buildRewriteLabel(json.quote, json.report), guardData: { ...m.guardData!, quote: json.quote, report: json.report, _rawReport: json._rawReport, diff: json.diff ?? null, rewriteNote: undefined } }
           : m,
       ))
-    } catch {
-      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, phase: 'review' as const } : m))
+    } catch (err: any) {
+      const note = err instanceof Error ? err.message : 'Could not find a better route.'
+      setMessages(prev => prev.map(m =>
+        m.id === msgId
+          ? { ...m, phase: 'review' as const, guardData: { ...m.guardData!, rewriteNote: note } }
+          : m,
+      ))
     }
   }
 
