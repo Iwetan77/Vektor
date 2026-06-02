@@ -222,7 +222,22 @@ app.post('/api/intent', async (req, res) => {
     // Load memory context for the user
     const memCtx  = sender !== SIM_ADDR ? buildMemoryContext(sender) : undefined
     const parsed  = await parseIntent(text, memCtx)
-    const intent  = parsed.intent_type
+
+    // Guard: if the parser returned 'send' but the recipient is a known token symbol,
+    // the LLM confused "swap X to TOKEN" with "send X to RECIPIENT". Reclassify as swap.
+    const KNOWN_TOKEN_SYMBOLS = new Set([
+      'SUI', 'USDC', 'USDT', 'WETH', 'WBTC', 'DEEP',
+      'AFSUI', 'HASUI', 'VSUI', 'BUCK',
+      'LOFI', 'BLUB', 'OCEAN', 'HIPPO', 'BONK', 'MEME',
+    ])
+    if (parsed.intent_type === 'send' && parsed.recipient &&
+        KNOWN_TOKEN_SYMBOLS.has(parsed.recipient.toUpperCase())) {
+      parsed.output_goal   ??= parsed.recipient
+      parsed.recipient       = null
+      parsed.intent_type     = 'swap'
+    }
+
+    let intent  = parsed.intent_type
 
     // ── Language detection ───────────────────────────────────────────────
     // Parser returns detected language. 'en' is NOT in SUPPORTED_LANGS (it's the default),

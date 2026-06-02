@@ -48,6 +48,16 @@ Intent types (pick the most specific):
   manage_groups    — /group create, /group add, /group list — extract the subcommand in inferred_steps
 
 CRITICAL classification rules:
+  swap vs send — MOST IMPORTANT RULE: if the "to" / "for" target is a known token symbol
+    (SUI, USDC, USDT, WETH, WBTC, DEEP, afSUI, haSUI, vSUI, BUCK, LOFI, BLUB, OCEAN,
+    HIPPO, BONK, MEME), it is ALWAYS a swap — NEVER a send. The recipient field for send
+    MUST be a wallet address (0x…) or a human contact name, never a token symbol.
+    Examples:
+      "swap 0.005 SUI to USDC"   → swap  (USDC is a token, not a recipient)
+      "swap 1 SUI for USDC"      → swap
+      "send 5 SUI to USDC"       → swap  (USDC is a token — reclassify as swap)
+      "send 5 SUI to 0xabc…"    → send  (0x address = valid recipient)
+      "send 5 SUI to Alice"      → contact_payment  (name = contact)
   explain_transaction: ONLY use when the user provides an actual transaction hash (a long
     alphanumeric string like "D8zRVkhzNihmgLKSEeESh2TP7d4iRHa5HXgBgn1Eb93C") or a
     suiscan/suivision URL. "What did I do last?" has NO digest → use transaction_history instead.
