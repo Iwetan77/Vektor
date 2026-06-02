@@ -223,18 +223,27 @@ app.post('/api/intent', async (req, res) => {
     const memCtx  = sender !== SIM_ADDR ? buildMemoryContext(sender) : undefined
     const parsed  = await parseIntent(text, memCtx)
 
-    // Guard: if the parser returned 'send' but the recipient is a known token symbol,
-    // the LLM confused "swap X to TOKEN" with "send X to RECIPIENT". Reclassify as swap.
+    // Guard: if the parser returned 'send' or 'contact_payment' but the target
+    // (recipient / recipient_name) is a known token symbol, the LLM confused
+    // "swap X to TOKEN" or "swap X for TOKEN" with a transfer. Reclassify as swap.
     const KNOWN_TOKEN_SYMBOLS = new Set([
       'SUI', 'USDC', 'USDT', 'WETH', 'WBTC', 'DEEP',
       'AFSUI', 'HASUI', 'VSUI', 'BUCK',
       'LOFI', 'BLUB', 'OCEAN', 'HIPPO', 'BONK', 'MEME',
     ])
-    if (parsed.intent_type === 'send' && parsed.recipient &&
-        KNOWN_TOKEN_SYMBOLS.has(parsed.recipient.toUpperCase())) {
-      parsed.output_goal   ??= parsed.recipient
-      parsed.recipient       = null
-      parsed.intent_type     = 'swap'
+    if (parsed.intent_type === 'send' || parsed.intent_type === 'contact_payment') {
+      const target = (
+        parsed.recipient ??
+        (parsed as any).recipient_name ??
+        parsed.output_goal ??
+        ''
+      ).toUpperCase()
+      if (KNOWN_TOKEN_SYMBOLS.has(target)) {
+        parsed.output_goal        = target
+        parsed.recipient          = null
+        ;(parsed as any).recipient_name = null
+        parsed.intent_type        = 'swap'
+      }
     }
 
     let intent  = parsed.intent_type
@@ -981,6 +990,22 @@ app.post('/api/intent', async (req, res) => {
       ),
     ])
 
+    // Guard: Routex silently returns an empty Transaction when buildFromRoute fails.
+    // Detect it here — before Guardian — so the user never sees a confirmable
+    // card for a swap that will execute as a no-op on-chain.
+    {
+      const ptbCheck = JSON.parse(quote.ptb.serialize() as string)
+      if (!ptbCheck.transactions?.length) {
+        const errEn  = `Could not build the swap transaction for ${fromToken} → ${toToken}. The DEX route exists but the transaction could not be constructed — this is a temporary issue. Try again in a moment or use a different amount.`
+        const errMsg = lang === 'en' ? errEn : await complete({
+          system: 'You are Vektor. Translate this error message exactly, keeping token symbols unchanged.',
+          prompt: errEn, maxTokens: 100, lang,
+        }).catch(() => errEn)
+        res.json({ ok: false, error: errMsg, language: lang })
+        return
+      }
+    }
+
     const quoteWithSym = { ...quote, fromSymbol: fromToken, toSymbol: toToken }
     const report       = await runGuardian(quoteWithSym, sender, null, lang)
 
@@ -1350,6 +1375,18 @@ app.post('/api/ptb', async (req, res) => {
     }
 
     const ptbJson = quote.ptb.serialize()
+
+    // Guard: Routex silently returns an empty Transaction when buildFromRoute fails.
+    // Reject here — never let an empty PTB reach the wallet.
+    const ptbCheck = JSON.parse(ptbJson as string)
+    if (!ptbCheck.transactions?.length) {
+      res.status(500).json({
+        ok: false,
+        error: `Could not build swap transaction for ${from} → ${to}. The route exists but the DEX failed to construct the transaction — try again or use a different amount.`,
+      })
+      return
+    }
+
     res.json({ ok: true, ptbJson })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
