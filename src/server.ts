@@ -984,11 +984,7 @@ app.post('/api/intent', async (req, res) => {
         amount:            amountIn,
         slippageTolerance: parsed.constraints.max_slippage ?? 0.005,
         senderAddress:     sender,
-        // routex-sui 1.2.7's PTBBuilder only handles deepbook/cetus/aftermath.
-        // Force the pathfinder to skip protocols whose builders are missing,
-        // otherwise quote.ptb comes back as an empty Transaction.
-        excludeProtocols:  ['turbos', 'flowx', 'hop', 'sevenkprotocol'],
-      } as any),
+      }),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('Quote timed out — try again in a moment.')), QUOTE_MS)
       ),
@@ -1360,8 +1356,7 @@ app.post('/api/ptb', async (req, res) => {
         amount:            BigInt(amountIn),
         slippageTolerance: slippage ?? 0.005,
         senderAddress:     sender,
-        excludeProtocols:  ['turbos', 'flowx', 'hop', 'sevenkprotocol'],
-      } as any),
+      }),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('Quote timed out — try again in a moment.')), QUOTE_MS)
       ),
