@@ -260,7 +260,7 @@ app.post('/api/intent', async (req, res) => {
     if (sender !== SIM_ADDR) {
       registerWallet(sender)
       incrementIntentCount(sender)
-      logIntent(sender, { type: intent, summary: text.slice(0, 120), status: 'success' })
+      if (intent) logIntent(sender, { type: intent, summary: text.slice(0, 120), status: 'success' })
       // Persist language preference — always overwrite so stale non-English prefs get cleared
       setPreferredLanguage(sender, lang)
       // Bump registry on swap/memecoin types

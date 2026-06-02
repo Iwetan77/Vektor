@@ -269,8 +269,8 @@ export function Sidebar({ wallet, portfolio, onRefresh }: SidebarProps) {
             ) : history.map(h => (
               <div key={h.id} className="rounded-xl border border-white/5 bg-[#111118] p-3 space-y-1">
                 <div className="flex items-center justify-between">
-                  <span className={`text-[9px] font-mono uppercase tracking-widest ${intentColor(h.type)}`}>
-                    · {h.type.replace(/_/g, ' ')}
+                  <span className={`text-[9px] font-mono uppercase tracking-widest ${intentColor(h.type ?? '')}`}>
+                    · {(h.type ?? 'unknown').replace(/_/g, ' ')}
                   </span>
                   <span className={`text-[9px] font-mono ${h.status === 'success' ? 'text-emerald-500' : h.status === 'failed' ? 'text-red-500' : 'text-yellow-500'}`}>
                     {h.status}
