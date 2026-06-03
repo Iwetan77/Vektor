@@ -81,8 +81,26 @@ const PORT   = 3001
 // pathfinder + 2 s gas estimate = ~8 s. 18 s gives 10 s of headroom.
 const QUOTE_MS = 18_000
 
-function createRoutex(network: 'mainnet', sender: string) {
-  return new Routex(network, sender)
+// Routex maintains internal SDK clients (DeepBook, Cetus, Aftermath, 7K, …)
+// that pay a 5-15s cold-start cost on first use. Sharing one instance across
+// requests warms those clients once and keeps subsequent quotes fast.
+//
+// Safety: the constructor's `sender` argument is only used as a SIMULATION
+// default for downstream SDK init. Every call site passes `senderAddress`
+// explicitly via `getQuote({ senderAddress })`, and `buildFromRoute` uses the
+// per-call sender for `tx.setSender(...)`. So one shared instance handles
+// any user safely.
+//
+// Memoized by network because `setNetwork(network)` is called in the
+// constructor and would mutate global state if we mixed networks.
+const routexCache = new Map<'mainnet', Routex>()
+function createRoutex(network: 'mainnet', _sender: string) {
+  let cached = routexCache.get(network)
+  if (!cached) {
+    cached = new Routex(network)
+    routexCache.set(network, cached)
+  }
+  return cached
 }
 
 // Serialize BigInt values as strings so res.json() never throws
