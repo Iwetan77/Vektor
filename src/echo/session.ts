@@ -7,9 +7,49 @@
 
 import { Ed25519Keypair }   from '@mysten/sui/keypairs/ed25519'
 import { Transaction }      from '@mysten/sui/transactions'
+import crypto               from 'node:crypto'
 import { writeUserData, readUserData } from '../walrus/client.js'
 
 const SESSION_KEY = 'echo-session-key'
+const ENC_ENV     = 'VEKTOR_KEY_ENCRYPTION_SECRET'
+
+/* ─── AES-256-GCM helpers ─────────────────────────────────────────────── */
+
+function loadEncryptionKey(): Buffer {
+  const b64 = process.env[ENC_ENV]
+  if (!b64) throw new Error(`${ENC_ENV} not set — refusing to store session key`)
+  const key = Buffer.from(b64, 'base64')
+  if (key.length !== 32) {
+    throw new Error(`${ENC_ENV} must be 32 bytes (base64-encoded), got ${key.length}`)
+  }
+  return key
+}
+
+interface EncryptedBlob { iv: string; ciphertext: string; tag: string; v: 1 }
+
+export function encryptSecret(plaintext: Buffer): EncryptedBlob {
+  const key    = loadEncryptionKey()
+  const iv     = crypto.randomBytes(12)
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
+  const ct     = Buffer.concat([cipher.update(plaintext), cipher.final()])
+  const tag    = cipher.getAuthTag()
+  return {
+    v:          1,
+    iv:         iv.toString('base64'),
+    ciphertext: ct.toString('base64'),
+    tag:        tag.toString('base64'),
+  }
+}
+
+export function decryptSecret(blob: EncryptedBlob): Buffer {
+  const key      = loadEncryptionKey()
+  const iv       = Buffer.from(blob.iv, 'base64')
+  const ct       = Buffer.from(blob.ciphertext, 'base64')
+  const tag      = Buffer.from(blob.tag, 'base64')
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv)
+  decipher.setAuthTag(tag)
+  return Buffer.concat([decipher.update(ct), decipher.final()])
+}
 
 /* ─── Mode limits (in MIST: 1 SUI = 1e9 MIST) ─────────────────────────── */
 // Using USD-equivalent USDC base units (6 decimals):
@@ -25,16 +65,15 @@ export function generateSessionKeypair(): Ed25519Keypair {
   return new Ed25519Keypair()
 }
 
-/* ─── Store the session private key on Walrus ───────────────────────────── */
+/* ─── Store the session private key on Walrus (AES-256-GCM encrypted) ──── */
 export async function storeSessionKey(
   wallet:     string,
   secretKey:  Uint8Array,
 ): Promise<string> {
-  // In production: encrypt with user's public key before storing.
-  // For now: store as base64 on Walrus — only accessible via the blobId
-  // reference on the user's on-chain EchoRegistry object.
-  const b64 = Buffer.from(secretKey).toString('base64')
-  return writeUserData(wallet, SESSION_KEY, { key: b64 })
+  // Encrypt before writing — VEKTOR_KEY_ENCRYPTION_SECRET must be set.
+  // Fails closed if the env var is missing so we never write plaintext.
+  const blob = encryptSecret(Buffer.from(secretKey))
+  return writeUserData(wallet, SESSION_KEY, blob)
 }
 
 /* ─── Load the session keypair from Walrus ────────────────────────────── */
@@ -42,10 +81,23 @@ export async function loadSessionKeypair(
   wallet: string,
 ): Promise<Ed25519Keypair | null> {
   try {
-    const raw = await readUserData(wallet, SESSION_KEY) as { key: string } | null
-    if (!raw?.key) return null
-    const bytes = Buffer.from(raw.key, 'base64')
-    return Ed25519Keypair.fromSecretKey(bytes)
+    const raw = await readUserData(wallet, SESSION_KEY) as
+      | EncryptedBlob
+      | { key: string }
+      | null
+    if (!raw) return null
+
+    // Backward-compat: handle legacy plaintext { key } payloads.
+    if ('key' in raw && typeof raw.key === 'string') {
+      return Ed25519Keypair.fromSecretKey(Buffer.from(raw.key, 'base64'))
+    }
+
+    if ('ciphertext' in raw && 'iv' in raw && 'tag' in raw) {
+      const bytes = decryptSecret(raw as EncryptedBlob)
+      return Ed25519Keypair.fromSecretKey(bytes)
+    }
+
+    return null
   } catch {
     return null
   }

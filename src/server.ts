@@ -18,6 +18,7 @@ import fs               from 'fs'
 import path             from 'path'
 import express          from 'express'
 import cors             from 'cors'
+import rateLimit         from 'express-rate-limit'
 import multer           from 'multer'
 import Routex           from 'routex-sui'
 import { complete, activeProvider, LANG_NAMES, SUPPORTED_LANGS } from './ai/client.js'
@@ -55,6 +56,8 @@ import { readEchoData, writeEchoData }           from './echo/walrus.js'
 import { calculateEchoScore, scoreInsights }     from './echo/score.js'
 import { parseRule }                             from './echo/rules.js'
 import { generateSessionKeypair, storeSessionKey, buildSessionAuthPtb, MODE_LIMITS } from './echo/session.js'
+import { requireWalletSig, requireWalletSigOrWorkerSecret } from './middleware/requireWalletSig.js'
+import { getConditionById } from './db/store.js'
 
 /* ─── VektorRegistry — local JSON counter ────────────────────────────────── */
 
@@ -191,8 +194,30 @@ function calcNextRun(spec: any): string {
   return now.toISOString()
 }
 
-app.use(cors())
+/* ─── CORS allowlist ───────────────────────────────────────────────────── */
+const ALLOWED_ORIGINS = (process.env.VEKTOR_ALLOWED_ORIGINS ?? 'http://localhost:5173')
+  .split(',').map(s => s.trim()).filter(Boolean)
+
+app.use(cors({
+  origin: (origin, cb) => {
+    // Allow same-origin/no-origin (curl, server-to-server) requests.
+    if (!origin) return cb(null, true)
+    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true)
+    cb(new Error(`CORS: origin ${origin} not allowed`))
+  },
+}))
 app.use(express.json())
+
+/* ─── Rate limiting (10/min/IP on hot user-input routes) ─────────────── */
+const intentLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max:      10,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  message:  { ok: false, error: 'rate limit exceeded' },
+})
+app.use('/api/intent',     intentLimiter)
+app.use('/api/transcribe', intentLimiter)
 
 /* ─────────────────────────────────────────────────────────────────────────
    POST /api/intent  — unified intent handler
@@ -1200,7 +1225,9 @@ app.get('/api/schedule/:wallet', (req, res) => {
   res.json({ ok: true, scheduled: getScheduled(req.params.wallet) })
 })
 
-app.delete('/api/schedule/:id', (req, res) => {
+app.delete('/api/schedule/:id', requireWalletSig({
+  resolveWallet: req => getScheduledById(String(req.params.id))?.wallet,
+}), (req, res) => {
   const ok = cancelScheduled(req.params.id)
   res.json({ ok })
 })
@@ -1211,7 +1238,9 @@ app.get('/api/conditions/:wallet', (req, res) => {
   res.json({ ok: true, conditions: getConditions(req.params.wallet) })
 })
 
-app.delete('/api/conditions/:id', (req, res) => {
+app.delete('/api/conditions/:id', requireWalletSig({
+  resolveWallet: req => getConditionById(String(req.params.id))?.wallet,
+}), (req, res) => {
   const ok = cancelCondition(req.params.id)
   res.json({ ok })
 })
@@ -1282,7 +1311,9 @@ app.post('/api/navi-ptb', async (req, res) => {
 // Looks up the schedule by ID, runs Routex + Guardian, returns a swap response
 // identical to /api/intent so the existing ConfirmationGate flow handles signing.
 
-app.post('/api/execute-scheduled/:id', async (req, res) => {
+app.post('/api/execute-scheduled/:id', requireWalletSig({
+  resolveWallet: req => getScheduledById(String(req.params.id))?.wallet,
+}), async (req, res) => {
   try {
     const { senderAddress } = req.body as { senderAddress?: string }
     const sender = senderAddress || SIM_ADDR
@@ -1473,7 +1504,7 @@ app.get('/api/contacts/:wallet', async (req, res) => {
   }
 })
 
-app.post('/api/contacts/:wallet', async (req, res) => {
+app.post('/api/contacts/:wallet', requireWalletSig(), async (req, res) => {
   try {
     const { name, address, note } = req.body as { name: string; address: string; note?: string }
     if (!name || !address) { res.status(400).json({ ok: false, error: 'name and address required' }); return }
@@ -1484,7 +1515,7 @@ app.post('/api/contacts/:wallet', async (req, res) => {
   }
 })
 
-app.delete('/api/contacts/:wallet/:name', async (req, res) => {
+app.delete('/api/contacts/:wallet/:name', requireWalletSig(), async (req, res) => {
   try {
     const removed = await removeContact(req.params.wallet, decodeURIComponent(req.params.name))
     res.json({ ok: removed })
@@ -1495,7 +1526,7 @@ app.delete('/api/contacts/:wallet/:name', async (req, res) => {
 
 /* ─── Groups ──────────────────────────────────────────────────────────── */
 
-app.post('/api/groups/:wallet', async (req, res) => {
+app.post('/api/groups/:wallet', requireWalletSig(), async (req, res) => {
   try {
     const { name, members } = req.body as { name: string; members: { name: string; address: string }[] }
     if (!name) { res.status(400).json({ ok: false, error: 'group name required' }); return }
@@ -1506,7 +1537,7 @@ app.post('/api/groups/:wallet', async (req, res) => {
   }
 })
 
-app.post('/api/groups/:wallet/:groupName/members', async (req, res) => {
+app.post('/api/groups/:wallet/:groupName/members', requireWalletSig(), async (req, res) => {
   try {
     const { name, address } = req.body as { name: string; address: string }
     if (!name || !address) { res.status(400).json({ ok: false, error: 'name and address required' }); return }
@@ -1689,7 +1720,7 @@ app.get('/api/echo/:wallet', async (req, res) => {
 })
 
 // POST /api/echo/:wallet/mode — switch mode
-app.post('/api/echo/:wallet/mode', async (req, res) => {
+app.post('/api/echo/:wallet/mode', requireWalletSig(), async (req, res) => {
   try {
     const { mode } = req.body as { mode: 'basic' | 'medium' | 'high' }
     if (!['basic', 'medium', 'high'].includes(mode)) {
@@ -1706,7 +1737,7 @@ app.post('/api/echo/:wallet/mode', async (req, res) => {
 })
 
 // POST /api/echo/:wallet/rules — parse + add a rule
-app.post('/api/echo/:wallet/rules', async (req, res) => {
+app.post('/api/echo/:wallet/rules', requireWalletSig(), async (req, res) => {
   try {
     const { raw } = req.body as { raw: string }
     if (!raw?.trim()) { res.status(400).json({ ok: false, error: 'Rule text required' }); return }
@@ -1732,7 +1763,7 @@ app.post('/api/echo/:wallet/rules', async (req, res) => {
 })
 
 // DELETE /api/echo/:wallet/rules/:id
-app.delete('/api/echo/:wallet/rules/:id', async (req, res) => {
+app.delete('/api/echo/:wallet/rules/:id', requireWalletSig(), async (req, res) => {
   try {
     const data  = await readEchoData(req.params.wallet)
     data.rules  = data.rules.filter(r => r.id !== req.params.id)
@@ -1745,7 +1776,7 @@ app.delete('/api/echo/:wallet/rules/:id', async (req, res) => {
 })
 
 // POST /api/echo/:wallet/score — recalculate and store Echo Score
-app.post('/api/echo/:wallet/score', async (req, res) => {
+app.post('/api/echo/:wallet/score', requireWalletSig(), async (req, res) => {
   try {
     const { portfolio, naviPositions } = req.body
     const score = calculateEchoScore(portfolio, naviPositions ?? null)
@@ -1762,7 +1793,7 @@ app.post('/api/echo/:wallet/score', async (req, res) => {
 })
 
 // POST /api/echo/:wallet/session-key — generate ephemeral keypair + return PTB for user to sign
-app.post('/api/echo/:wallet/session-key', async (req, res) => {
+app.post('/api/echo/:wallet/session-key', requireWalletSig(), async (req, res) => {
   try {
     const { mode, packageId, expiryDays = 7 } = req.body as {
       mode:      'medium' | 'high'
@@ -1806,7 +1837,7 @@ app.post('/api/echo/:wallet/session-key', async (req, res) => {
 })
 
 // POST /api/echo/:wallet/session-key/confirm — store auth object ID after user signed
-app.post('/api/echo/:wallet/session-key/confirm', async (req, res) => {
+app.post('/api/echo/:wallet/session-key/confirm', requireWalletSig(), async (req, res) => {
   try {
     const { authObjectId, sessionAddress, expiresAt, maxAmountPerTx, maxAmountPerDay } = req.body
     const data = await readEchoData(req.params.wallet)
@@ -1820,7 +1851,7 @@ app.post('/api/echo/:wallet/session-key/confirm', async (req, res) => {
 })
 
 // DELETE /api/echo/:wallet/session-key — revoke
-app.delete('/api/echo/:wallet/session-key', async (req, res) => {
+app.delete('/api/echo/:wallet/session-key', requireWalletSig(), async (req, res) => {
   try {
     const data = await readEchoData(req.params.wallet)
     delete data.sessionKeyMetadata
@@ -1832,8 +1863,116 @@ app.delete('/api/echo/:wallet/session-key', async (req, res) => {
   }
 })
 
+// POST /api/echo/:wallet/execute — server-side autonomous swap using session key.
+// Auth: wallet signature OR X-Echo-Worker-Secret. Reuses the tryAutoExecute pattern.
+app.post('/api/echo/:wallet/execute', requireWalletSigOrWorkerSecret(), async (req, res) => {
+  try {
+    const wallet = req.params.wallet
+    const { from, to, amount } = req.body as {
+      from?:   string
+      to?:     string
+      amount?: number   // human-readable units (e.g. 100 USDC)
+    }
+    if (!from || !to || amount == null) {
+      res.status(400).json({ ok: false, error: 'from, to, amount required' }); return
+    }
+
+    const fromToken = from.toUpperCase()
+    const toToken   = to.toUpperCase()
+
+    const { loadSessionKeypair } = await import('./echo/session.js')
+    const keypair = await loadSessionKeypair(wallet)
+    if (!keypair) {
+      res.status(400).json({ ok: false, error: 'No session key found for wallet' }); return
+    }
+
+    const data = await readEchoData(wallet)
+    const meta = data.sessionKeyMetadata
+    if (!meta) {
+      res.status(400).json({ ok: false, error: 'No session-key metadata recorded' }); return
+    }
+    if (meta.expiresAt < Date.now()) {
+      res.status(400).json({ ok: false, error: 'Session key expired' }); return
+    }
+
+    const sessionAddr = keypair.getPublicKey().toSuiAddress()
+
+    const amountIn = toBaseUnits(amount, fromToken)
+    const routex   = createRoutex('mainnet', sessionAddr)
+    const quote    = await Promise.race([
+      routex.getQuote({
+        from:              fromToken,
+        to:                toToken,
+        amount:            amountIn,
+        slippageTolerance: 0.005,
+        senderAddress:     sessionAddr,
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Quote timed out')), QUOTE_MS)
+      ),
+    ])
+
+    // ── Append on-chain record_execution to the SAME PTB (Task 4) ──
+    // The swap PTB lives in quote.ptb; we append a moveCall before executing
+    // so the session limits are enforced atomically with the swap.
+    const tx = quote.ptb as InstanceType<typeof import('@mysten/sui/transactions').Transaction>
+    const pkgId = process.env.ECHO_REGISTRY_PACKAGE_ID
+    if (!pkgId) {
+      res.status(500).json({
+        ok:    false,
+        error: 'ECHO_REGISTRY_PACKAGE_ID not configured — cannot enforce on-chain limits',
+      }); return
+    }
+    // Convert to USD-equivalent USDC micros (6 decimals) so the on-chain
+    // limit check compares apples to apples regardless of from-token.
+    const STABLE = new Set(['USDC', 'USDT', 'BUCK'])
+    let usdMicros: bigint
+    if (STABLE.has(fromToken)) {
+      usdMicros = amountIn
+    } else {
+      const px = getCurrentPrice(fromToken)
+      if (px == null || !isFinite(px) || px <= 0) {
+        res.status(503).json({
+          ok:    false,
+          error: `Cannot derive USD-equivalent for ${fromToken} (no price feed) — refusing to skip on-chain limit check`,
+        }); return
+      }
+      usdMicros = BigInt(Math.round(amount * px * 1_000_000))
+    }
+
+    tx.moveCall({
+      target:    `${pkgId}::session_auth::record_execution`,
+      arguments: [
+        tx.object(meta.authObjectId),
+        tx.pure.u64(usdMicros),
+        tx.object('0x6'),
+      ],
+    })
+
+    const sdkClient: any = await import('@mysten/sui/client')
+    const suiClient = new sdkClient.SuiClient({ url: sdkClient.getFullnodeUrl('mainnet') })
+
+    const result = await suiClient.signAndExecuteTransaction({
+      signer:      keypair,
+      transaction: tx,
+      options:     { showEffects: true },
+    })
+
+    res.json({
+      ok:     true,
+      digest: result.digest,
+      from:   fromToken,
+      to:     toToken,
+      amount,
+    })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    res.status(500).json({ ok: false, error: msg })
+  }
+})
+
 // POST /api/echo/:wallet/parse-rule — parse only, don't save (for preview)
-app.post('/api/echo/:wallet/parse-rule', async (req, res) => {
+app.post('/api/echo/:wallet/parse-rule', requireWalletSig(), async (req, res) => {
   try {
     const { raw } = req.body as { raw: string }
     if (!raw?.trim()) { res.status(400).json({ ok: false, error: 'Rule text required' }); return }

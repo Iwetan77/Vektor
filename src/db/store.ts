@@ -176,6 +176,10 @@ export function getAllConditions(): Condition[] {
   return load().conditions.filter(c => !c.fired)
 }
 
+export function getConditionById(id: string): Condition | undefined {
+  return load().conditions.find(c => c.id === id)
+}
+
 export function markConditionFired(id: string): void {
   const store = load()
   const item  = store.conditions.find(c => c.id === id)

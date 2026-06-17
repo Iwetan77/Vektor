@@ -1,12 +1,45 @@
 /**
- * Echo executor — signs and executes transactions using the session key.
- * Only called in HIGH mode after rule evaluation confirms execution should proceed.
+ * Echo executor — calls the Vektor backend /api/echo/:wallet/execute endpoint
+ * to perform an autonomous swap signed by the session key. The backend holds
+ * the encrypted session key (Walrus + AES-256-GCM) and owns the Sui RPC.
+ *
+ * MEDIUM mode is propose-and-confirm and does NOT call this path.
  */
 
 import { pushExecuted } from './alerter'
 import type { EchoUser, Env, EchoRule } from './types'
 import type { State }  from './evaluator'
-import { readBlob }    from './walrus'
+
+interface ExecuteParams {
+  from:   string
+  to:     string
+  amount: number
+}
+
+async function callBackendExecute(
+  user:   EchoUser,
+  params: ExecuteParams,
+  env:    Env,
+): Promise<string /* digest */> {
+  const baseUrl = (env as Env & { VEKTOR_BACKEND_URL?: string }).VEKTOR_BACKEND_URL
+    ?? 'http://localhost:3001'
+  const secret  = (env as Env & { ECHO_WORKER_SECRET?: string }).ECHO_WORKER_SECRET ?? ''
+
+  const res = await fetch(`${baseUrl}/api/echo/${user.address}/execute`, {
+    method: 'POST',
+    headers: {
+      'content-type':          'application/json',
+      'x-echo-worker-secret':  secret,
+    },
+    body: JSON.stringify(params),
+  })
+
+  const body = await res.json() as { ok: boolean; digest?: string; error?: string }
+  if (!body.ok || !body.digest) {
+    throw new Error(`backend execute failed: ${body.error ?? res.status}`)
+  }
+  return body.digest
+}
 
 export async function executeWithSessionKey(opts: {
   user:   EchoUser
@@ -14,47 +47,78 @@ export async function executeWithSessionKey(opts: {
   env:    Env
   description: string
   estimatedUsd?: number
+  params?: ExecuteParams
 }): Promise<string /* digest */> {
-  const { user, ptbB64, env, description, estimatedUsd } = opts
+  const { user, env, description, estimatedUsd, params } = opts
   const meta = user.echoData.sessionKeyMetadata
   if (!meta) throw new Error('No session key metadata')
   if (meta.expiresAt < Date.now()) throw new Error('Session key expired')
+  if (!params) throw new Error('execute params (from/to/amount) required')
 
-  // Load session private key from Walrus
-  // The session key blobId is stored separately from main EchoUserData
-  // Key reference stored in local registry on the server — not available in worker.
-  // In production, the worker would have its own KV or Durable Object for key storage.
-  // For now, throw — executor requires server-side key retrieval which is handled
-  // by the Vektor backend's /api/echo/:wallet/execute endpoint.
-  throw new Error(
-    'Direct worker execution not yet implemented — session key retrieval requires server-side call. ' +
-    'Use /api/echo/:wallet/execute endpoint instead.'
-  )
+  const digest = await callBackendExecute(user, params, env)
+  await pushExecuted(user.address, description, digest, estimatedUsd, env).catch(() => {})
+  return digest
 }
 
 /** Execute a rule that has been evaluated as true */
 export async function executeRule(
   rule:  EchoRule,
   user:  EchoUser,
-  state: State,
+  _state: State,
   env:   Env,
 ): Promise<void> {
-  // For now: log the intended execution and push notification
-  // Full PTB building requires the Routex SDK and NAVI PTB builder
-  // which are available in the Vektor server, not the worker
   const description = rule.parsed.action ?? rule.raw
-  await pushExecuted(user.address, `[Simulated] ${description}`, '', undefined, env).catch(() => {})
+  const params = paramsFromRule(rule)
+  if (!params) {
+    await pushExecuted(user.address, description, '', undefined, env).catch(() => {})
+    return
+  }
+  try {
+    const digest = await callBackendExecute(user, params, env)
+    await pushExecuted(user.address, description, digest, undefined, env).catch(() => {})
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    await pushExecuted(user.address, `${description} (failed: ${msg})`, '', undefined, env).catch(() => {})
+  }
 }
 
-/** Check if a scheduled intent is due and execute it */
+/** Execute a scheduled intent that is due. */
 export async function executeScheduledIntent(
-  user:   EchoUser,
+  user:     EchoUser,
   intentId: string,
-  env:    Env,
+  env:      Env,
 ): Promise<void> {
   const intent = user.echoData.scheduledIntents.find(s => s.id === intentId)
   if (!intent || !intent.active) return
-  // Trigger execution via Vektor backend
-  // The worker signals the backend which has full SDK access
-  await pushExecuted(user.address, `Scheduled: ${intent.raw}`, '', undefined, env).catch(() => {})
+
+  const params = paramsFromScheduled(intent)
+  if (!params) {
+    await pushExecuted(user.address, `Scheduled: ${intent.raw}`, '', undefined, env).catch(() => {})
+    return
+  }
+  try {
+    const digest = await callBackendExecute(user, params, env)
+    await pushExecuted(user.address, `Scheduled: ${intent.raw}`, digest, undefined, env).catch(() => {})
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    await pushExecuted(user.address, `Scheduled failed: ${msg}`, '', undefined, env).catch(() => {})
+  }
+}
+
+function paramsFromRule(rule: EchoRule): ExecuteParams | null {
+  const p = rule.parsed.params as Record<string, unknown> | undefined
+  if (!p) return null
+  const from   = typeof p.from === 'string' ? p.from : undefined
+  const to     = typeof p.to   === 'string' ? p.to   : undefined
+  const amount = typeof p.amount === 'number' ? p.amount : undefined
+  if (!from || !to || amount == null) return null
+  return { from, to, amount }
+}
+
+function paramsFromScheduled(intent: { raw: string } & Record<string, unknown>): ExecuteParams | null {
+  const from   = typeof intent.from === 'string'   ? intent.from   : undefined
+  const to     = typeof intent.to === 'string'     ? intent.to     : undefined
+  const amount = typeof intent.amount === 'number' ? intent.amount : undefined
+  if (!from || !to || amount == null) return null
+  return { from, to, amount }
 }

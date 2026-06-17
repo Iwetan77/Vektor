@@ -1,3 +1,9 @@
+/**
+ * @deprecated Legacy Guardian risk engine. Canonical engine is `./v2.ts`.
+ * Kept only because the deprecated `./index.ts` Guardian class still imports
+ * its helpers. No server path imports `guardian/risks` directly.
+ * Do not add new callers — extend v2 instead.
+ */
 import type { RoutexQuote } from 'routex-sui'
 import { RiskClass, type RiskFlag, type VektorIntent } from '../types.js'
 
