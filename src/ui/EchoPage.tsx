@@ -5,12 +5,12 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useCurrentAccount }                        from '@mysten/dapp-kit'
-import { EchoOrb }                                  from './EchoOrb'
+import { EchoOrb }                                  from './EchoOrb.js'
 import type {
   EchoUserData, EchoRule,
   WatchCondition, ScheduledIntent, MonitoredPosition,
   EchoActivity, EchoScore, EchoWsMessage,
-} from '../echo/types'
+} from '../echo/types.js'
 
 /* ─── Helpers ─────────────────────────────────────────────────────────── */
 
@@ -268,7 +268,7 @@ function RulesEditor({
       if (!json.ok) throw new Error(json.error)
       setPreview({
         interpretation: json.interpretation,
-        rule: { id: crypto.randomUUID(), raw, parsed: json.parsed, active: true, createdAt: Date.now() },
+        rule: { id: crypto.randomUUID(), raw, parsed: json.parsed, active: true, autoExecute: false, createdAt: Date.now() },
       })
     } catch (e: any) {
       setErr(e.message ?? 'Failed to parse rule')
@@ -568,7 +568,7 @@ export default function EchoPage({ wsAlerts }: EchoPageProps) {
         <RulesEditor
           wallet={wallet}
           rules={data.rules}
-          onRulesChange={rules => setData(prev => prev ? { ...prev, rules } : prev)}
+          onRulesChange={(rules: EchoRule[]) => setData((prev: EchoUserData | null) => prev ? { ...prev, rules } : prev)}
         />
 
         <p className="text-center text-[10px] text-slate-700 pb-4">

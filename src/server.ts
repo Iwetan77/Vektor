@@ -56,6 +56,7 @@ import { readEchoData, writeEchoData }           from './echo/walrus.js'
 import { calculateEchoScore, scoreInsights }     from './echo/score.js'
 import { parseRule }                             from './echo/rules.js'
 import { generateSessionKeypair, storeSessionKey, buildSessionAuthPtb, DEFAULT_LIMITS } from './echo/session.js'
+import type { EchoRule } from './echo/types.js'
 import { requireWalletSig, requireWalletSigOrWorkerSecret } from './middleware/requireWalletSig.js'
 import { getConditionById } from './db/store.js'
 
@@ -1321,23 +1322,20 @@ app.post('/api/onboard/:token/claim', claimLimiter, async (req, res) => {
     const fundingKey = process.env.VEKTOR_FUNDING_KEY
     if (!fundingKey) { res.status(503).json({ ok: false, error: 'VEKTOR_FUNDING_KEY not configured' }); return }
 
-    const [ed25519Mod, cryptoMod, clientMod, txMod] = await Promise.all([
+    const [{ Ed25519Keypair }, { decodeSuiPrivateKey }, jsonRpcMod, { Transaction }] = await Promise.all([
       import('@mysten/sui/keypairs/ed25519'),
       import('@mysten/sui/cryptography'),
-      import('@mysten/sui/client'),
+      import('@mysten/sui/jsonRpc'),
       import('@mysten/sui/transactions'),
     ])
-    const Ed25519Keypair    = (ed25519Mod as any).Ed25519Keypair
-    const decodeSuiPrivateKey = (cryptoMod as any).decodeSuiPrivateKey
-    const SuiClient         = (clientMod as any).SuiClient
-    const getFullnodeUrl    = (clientMod as any).getFullnodeUrl
-    const Transaction       = (txMod as any).Transaction
+    const SuiClient      = jsonRpcMod.SuiJsonRpcClient
+    const getFullnodeUrl = jsonRpcMod.getJsonRpcFullnodeUrl
 
     const { secretKey } = decodeSuiPrivateKey(fundingKey)
     const keypair = Ed25519Keypair.fromSecretKey(secretKey)
     const sender  = keypair.getPublicKey().toSuiAddress()
     const network = (process.env.SUI_NETWORK ?? 'testnet') as 'testnet' | 'mainnet' | 'devnet'
-    const client  = new SuiClient({ url: getFullnodeUrl(network) })
+    const client  = new SuiClient({ url: getFullnodeUrl(network), network })
 
     const USDC_DECIMALS = 6
     const amountBase = BigInt(Math.round(invite.amount * 10 ** USDC_DECIMALS))
@@ -1709,6 +1707,48 @@ app.post('/api/batch-payment-ptb', async (req, res) => {
   }
 })
 
+/* ─── Single-recipient transfer PTB ───────────────────────────────────── */
+
+app.post('/api/send-ptb', async (req, res) => {
+  try {
+    const { senderAddress, recipient, token, amount } = req.body as {
+      senderAddress: string
+      recipient:     string
+      token:         string
+      amount:        number
+    }
+    if (!senderAddress || !recipient || !token || !amount || amount <= 0) {
+      res.status(400).json({ ok: false, error: 'senderAddress, recipient, token, amount required' }); return
+    }
+    if (!/^0x[0-9a-fA-F]{1,64}$/.test(recipient)) {
+      res.status(400).json({ ok: false, error: 'recipient must be a hex Sui address' }); return
+    }
+
+    const { Transaction, coinWithBalance } = await import('@mysten/sui/transactions')
+    const tx = new Transaction()
+    tx.setSender(senderAddress)
+
+    const tokenUpper = token.toUpperCase()
+    const coinType   = TOKEN_COIN_TYPES[tokenUpper] ?? '0x2::sui::SUI'
+    const decimals   = TOKEN_DECIMALS[tokenUpper]   ?? 1e9
+    const amountBase = BigInt(Math.round(amount * decimals))
+
+    if (tokenUpper === 'SUI') {
+      const [splitCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(amountBase)])
+      tx.transferObjects([splitCoin], recipient)
+    } else {
+      const coin = coinWithBalance({ type: coinType, balance: amountBase }) as any
+      tx.transferObjects([coin], recipient)
+    }
+
+    const ptbJson = tx.serialize()
+    res.json({ ok: true, ptbJson, token: tokenUpper, amount, recipient })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    res.status(500).json({ ok: false, error: msg })
+  }
+})
+
 /* ─── Walrus health check ─────────────────────────────────────────────── */
 
 app.get('/api/walrus/health', async (_, res) => {
@@ -1907,9 +1947,13 @@ app.post('/api/echo/:wallet/session-key', requireWalletSig(), async (req, res) =
     }
     const expiresAt  = Date.now() + expiryDays * 24 * 60 * 60 * 1000
 
-    // Store private key on Walrus
-    const secretKey = keypair.getSecretKey()
-    await storeSessionKey(req.params.wallet, secretKey instanceof Uint8Array ? secretKey : Buffer.from(secretKey as any))
+    // Store private key on Walrus. getSecretKey() returns Uint8Array on most
+    // versions; older builds returned a base64 string — handle both.
+    const secretKey: unknown = keypair.getSecretKey()
+    const secretBytes = secretKey instanceof Uint8Array
+      ? secretKey
+      : Buffer.from(secretKey as string, 'base64')
+    await storeSessionKey(req.params.wallet, secretBytes)
 
     // Build unsigned PTB for the user to sign with their main wallet
     const ptbB64 = await buildSessionAuthPtb({

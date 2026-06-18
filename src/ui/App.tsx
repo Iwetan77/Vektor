@@ -1,16 +1,16 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { ConnectModal, useCurrentAccount, useDisconnectWallet, useSuiClientQuery, useSignAndExecuteTransaction } from '@mysten/dapp-kit'
 import { Transaction } from '@mysten/sui/transactions'
-import { PTBPreview }       from './PTBPreview'
-import { GuardianReport }   from './GuardianReport'
-import { ConfirmationGate } from './ConfirmationGate'
-import { Sidebar }          from './Sidebar'
-import { ContactsPage }     from './ContactsPage'
-import { MicButton }        from './MicButton'
-import EchoPage             from './EchoPage'
-import { WelcomePage }      from './WelcomePage'
-import { useZkLogin }       from './useZkLogin'
-import type { EchoWsMessage } from '../echo/types'
+import { PTBPreview }       from './PTBPreview.js'
+import { GuardianReport }   from './GuardianReport.js'
+import { ConfirmationGate } from './ConfirmationGate.js'
+import { Sidebar }          from './Sidebar.js'
+import { ContactsPage }     from './ContactsPage.js'
+import { MicButton }        from './MicButton.js'
+import EchoPage             from './EchoPage.js'
+import { WelcomePage }      from './WelcomePage.js'
+import { useZkLogin }       from './useZkLogin.js'
+import type { EchoWsMessage } from '../echo/types.js'
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
@@ -508,9 +508,10 @@ interface BubbleProps {
   onReset:      () => void
   onSign:       () => void
   onBatchSign:  () => void
+  onSendSign:   () => void
 }
 
-function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign }: BubbleProps) {
+function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, onSendSign }: BubbleProps) {
   if (msg.role === 'user') {
     return (
       <div className="msg-in flex justify-end">
@@ -701,6 +702,42 @@ function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign }: 
         if (it === 'manage_contacts' || it === 'manage_groups') {
           if (msg.text) return <GeneralCard message={msg.text} />
           return null
+        }
+
+        if (it === 'send') {
+          const p = msg.payload?.ptbParams as { token?: string; amount?: number; recipient?: string; contactName?: string } | undefined
+          if (msg.executionDigest) return (
+            <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-6 py-5 space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="text-emerald-400 text-lg">✓</span>
+                <span className="text-white font-semibold text-sm">Sent {p?.amount} {p?.token}</span>
+              </div>
+              <div className="flex items-center gap-2 font-mono text-xs text-slate-400">
+                <span>Digest:</span>
+                <span className="text-slate-300">{msg.executionDigest.slice(0, 12)}…{msg.executionDigest.slice(-6)}</span>
+                <a href={`https://suiscan.xyz/mainnet/tx/${msg.executionDigest}`} target="_blank" rel="noreferrer" className="text-purple-400 hover:text-purple-300 transition-colors">↗ Suiscan</a>
+              </div>
+            </div>
+          )
+          if (msg.executionError) return (
+            <div className="rounded-xl border border-red-500/25 bg-red-500/5 px-6 py-5 space-y-2">
+              <div className="flex items-center gap-2"><span className="text-red-400">✕</span><span className="text-white font-semibold text-sm">Transfer failed</span></div>
+              <p className="text-xs text-red-300/70">{msg.executionError}</p>
+            </div>
+          )
+          return (
+            <div className="space-y-3">
+              {msg.text && <GeneralCard message={msg.text} />}
+              {p?.recipient && (
+                <button
+                  onClick={onSendSign}
+                  className="w-full py-2 rounded-lg bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/30 hover:border-purple-500/60 text-purple-300 text-xs font-semibold transition-colors"
+                >
+                  Confirm &amp; Send {p.amount} {p.token} →
+                </button>
+              )}
+            </div>
+          )
         }
 
         // Default text card
@@ -1000,7 +1037,7 @@ export default function App() {
 
         // Pre-fill portfolio from memory snapshot so balance shows immediately
         if (mem.portfolioSnapshot?.balances?.length > 0) {
-          setPortfolio(prev => prev ?? mem.portfolioSnapshot)
+          setPortfolio((prev: any) => prev ?? mem.portfolioSnapshot)
         }
 
         if (messages.length === 0) {
@@ -1418,6 +1455,71 @@ export default function App() {
     }
   }
 
+  /* ── Send (single-recipient transfer) ────────────────────────────── */
+  async function handleSendSign(msgId: string) {
+    const msg = messages.find(m => m.id === msgId)
+    const p   = msg?.payload?.ptbParams as { token?: string; amount?: number; recipient?: string } | undefined
+    if (!msg || !account || !p?.token || !p?.amount || !p?.recipient) return
+
+    setMessages(prev => prev.map(m =>
+      m.id === msgId ? { ...m, actionLabel: '· BUILDING · PTB' } : m
+    ))
+
+    try {
+      const res = await fetch('/api/send-ptb', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          senderAddress: account.address,
+          recipient:     p.recipient,
+          token:         p.token,
+          amount:        p.amount,
+        }),
+      })
+      const json = await res.json()
+      if (!json.ok) throw new Error(json.error ?? 'Failed to build send PTB')
+
+      const tx = Transaction.from(json.ptbJson)
+
+      setMessages(prev => prev.map(m =>
+        m.id === msgId ? { ...m, actionLabel: '· AWAITING · WALLET' } : m
+      ))
+
+      signAndExecuteTransaction(
+        { transaction: tx },
+        {
+          onSuccess: (result) => {
+            setMessages(prev => prev.map(m =>
+              m.id === msgId ? {
+                ...m,
+                actionLabel:     `· SENT · ${p.amount} ${p.token}`,
+                executionDigest: result.digest,
+              } : m
+            ))
+            setTimeout(refreshPortfolio, 3000)
+          },
+          onError: (error) => {
+            setMessages(prev => prev.map(m =>
+              m.id === msgId ? {
+                ...m,
+                actionLabel:    '· FAILED',
+                executionError: error.message ?? 'Transaction rejected.',
+              } : m
+            ))
+          },
+        }
+      )
+    } catch (err: any) {
+      setMessages(prev => prev.map(m =>
+        m.id === msgId ? {
+          ...m,
+          actionLabel:    '· ERROR',
+          executionError: err.message ?? 'Send failed.',
+        } : m
+      ))
+    }
+  }
+
   /* ── Fix (rewrite PTB) ────────────────────────────────────────────── */
   async function handleFix(msgId: string) {
     const msg = messages.find(m => m.id === msgId)
@@ -1534,7 +1636,7 @@ export default function App() {
       <WelcomePage
         token={inviteToken}
         connectOpen={connectOpen}
-        onConnectOpen={open => {
+        onConnectOpen={(open: boolean) => {
           setConnectOpen(open)
           if (!open && account) setShowWelcome(false)
         }}
@@ -1796,6 +1898,7 @@ export default function App() {
                   onReset={() => handleReset(msg.id)}
                   onSign={() => handleNaviSign(msg.id)}
                   onBatchSign={() => handleBatchSign(msg.id)}
+                  onSendSign={() => handleSendSign(msg.id)}
                 />
               ))}
 
@@ -1885,7 +1988,7 @@ export default function App() {
                       <MicButton
                         disabled={!account || isLoading}
                         wallet={account?.address}
-                        onLiveText={(text) => {
+                        onLiveText={(text: string) => {
                           // Only overwrite if the user hasn't manually edited the field
                           setInput(prev => {
                             if (prev !== micTextRef.current) return prev  // user edited — leave it alone
@@ -1894,7 +1997,7 @@ export default function App() {
                           })
                           if (textareaRef.current) autoResize(textareaRef.current)
                         }}
-                        onTranscription={(text) => {
+                        onTranscription={(text: string) => {
                           // Final commit — always write, then clear the mic tracker
                           micTextRef.current = ''
                           setInput(text)

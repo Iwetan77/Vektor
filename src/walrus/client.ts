@@ -10,7 +10,7 @@
  */
 
 import { WalrusClient }          from '@mysten/walrus'
-import { SuiClient, getFullnodeUrl } from '@mysten/sui/client'
+import { SuiJsonRpcClient as SuiClient, getJsonRpcFullnodeUrl as getFullnodeUrl } from '@mysten/sui/jsonRpc'
 import { Ed25519Keypair }        from '@mysten/sui/keypairs/ed25519'
 import fs   from 'fs'
 import path from 'path'
@@ -29,7 +29,7 @@ let _walrus:      WalrusClient  | null = null
 let _signer:      Ed25519Keypair | null = null
 
 function getSuiClient(): SuiClient {
-  if (!_suiClient) _suiClient = new SuiClient({ url: getFullnodeUrl(NETWORK) })
+  if (!_suiClient) _suiClient = new SuiClient({ url: getFullnodeUrl(NETWORK), network: NETWORK })
   return _suiClient
 }
 

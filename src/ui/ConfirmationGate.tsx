@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { AppState } from './App'
+import type { AppState } from './App.js'
 
 interface Props {
   report:       any

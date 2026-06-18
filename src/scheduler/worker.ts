@@ -85,11 +85,13 @@ async function tryAutoExecute(item: ScheduledIntent): Promise<void> {
   }
 
   try {
-    const [{ Ed25519Keypair }, { decodeSuiPrivateKey }, { SuiClient, getFullnodeUrl }] = await Promise.all([
+    const [{ Ed25519Keypair }, { decodeSuiPrivateKey }, jsonRpcMod] = await Promise.all([
       import('@mysten/sui/keypairs/ed25519'),
       import('@mysten/sui/cryptography'),
-      import('@mysten/sui/client'),
+      import('@mysten/sui/jsonRpc'),
     ])
+    const SuiClient      = jsonRpcMod.SuiJsonRpcClient
+    const getFullnodeUrl = jsonRpcMod.getJsonRpcFullnodeUrl
 
     const { secretKey } = decodeSuiPrivateKey(privateKey)
     const keypair       = Ed25519Keypair.fromSecretKey(secretKey)
@@ -107,7 +109,7 @@ async function tryAutoExecute(item: ScheduledIntent): Promise<void> {
       senderAddress:     wallet,
     })
 
-    const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet') })
+    const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet'), network: 'mainnet' })
     const result    = await suiClient.signAndExecuteTransaction({
       signer:      keypair,
       transaction: quote.ptb,

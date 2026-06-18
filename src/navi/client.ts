@@ -4,7 +4,7 @@
  * PTBs are returned serialized for the UI to sign via dapp-kit.
  */
 
-import { SuiClient, getFullnodeUrl } from '@mysten/sui/client'
+import { SuiJsonRpcClient as SuiClient, getJsonRpcFullnodeUrl as getFullnodeUrl } from '@mysten/sui/jsonRpc'
 import { Transaction }               from '@mysten/sui/transactions'
 import {
   NAVISDKClient,
@@ -17,7 +17,7 @@ import {
 } from 'navi-sdk'
 
 // Use the correct SuiClient from @mysten/sui/client — not the low-level jsonRpc variant.
-const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet') })
+const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet'), network: 'mainnet' })
 
 /* ─── Pool registry (PoolConfig, not CoinInfo — has poolId + assetId) ───── */
 // depositCoin / borrowCoin / repayDebt need a PoolConfig, not a CoinInfo.
@@ -67,9 +67,9 @@ export async function getNaviPositions(wallet: string): Promise<NaviPosition[]> 
 export async function getPoolRates(symbol: string) {
   try {
     const sdkClient = new NAVISDKClient({ networkType: 'mainnet', numberOfAccounts: 0 })
-    const coinInfo  = COIN_INFO[symbol.toUpperCase()]
-    if (!coinInfo) return null
-    return await sdkClient.getPoolInfo(coinInfo)
+    const poolCfg   = POOL_CONFIG[symbol.toUpperCase()]
+    if (!poolCfg) return null
+    return await sdkClient.getPoolInfo(poolCfg)
   } catch {
     return null
   }
