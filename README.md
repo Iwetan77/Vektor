@@ -186,6 +186,57 @@ The PTB compiler contains a clearly marked placeholder where [Seal SDK](https://
 // to prevent front-running. See block comment above for integration notes.
 ```
 
+## Testing Vektor
+
+### Try these in the chat
+
+Plain-English intents the chat parses and routes. Replace token amounts or addresses freely.
+
+- **Swap** — `swap 10 USDC for SUI`
+- **Swap (slippage preset)** — `swap 1 SUI to USDC with low slippage`
+- **Multilingual** — `troca 5 USDC por SUI` · `换 5 USDC 为 SUI`
+- **NAVI lend** — `deposit 5 SUI on NAVI`
+- **NAVI borrow** — `borrow 20 USDC against my SUI on NAVI`
+- **NAVI repay** — `repay 10 USDC on NAVI`
+- **DCA schedule** — `DCA $50 into SUI every week`
+- **One-shot scheduled swap** — `swap 100 USDC to SUI tomorrow at noon`
+- **Conditional order** — `sell half my SUI if SUI drops below $2`
+- **Conditional NAVI guard** — `repay my NAVI debt if health factor drops below 1.5`
+- **Add a contact** — `add Alice = 0xabc…123`
+- **Contact payment** — `send 5 USDC to Alice`
+- **Group / batch payment** — `pay rent: 30 USDC each to Alice, Bob, Charlie`
+- **Split payment** — `split 60 USDC three ways between Alice, Bob, Charlie`
+- **Balance** — `check my balance` · `how much USDC do I have`
+- **Price** — `what's the price of SUI`
+- **Portfolio analysis** — `analyse my wallet`
+- **Explain a transaction** — `explain tx 5kT…abc`
+
+### Testing Echo (autonomous agent)
+
+Echo is one mode. It always watches portfolio + health factor + price triggers and runs rules. Each rule has an `autoExecute` flag — `true` runs autonomously within session-key limits, `false` pushes a one-tap proposal you confirm. The worker polls every 60 seconds, so triggers fire within a minute.
+
+1. Open Echo from the sidebar and connect your wallet.
+2. **Create a session key** — Echo generates an ephemeral keypair, encrypts it with AES-256-GCM, stores it on Walrus, and returns an unsigned `SessionAuthorization` PTB.
+3. **Sign the authorization with your main wallet.** This caps per-tx and per-day spend on-chain. Default limits: $10k/tx, $50k/day; pass `maxPerTx` / `maxPerDay` (USDC base units) when creating to override.
+4. **Add a rule.** Examples:
+   - `never let my health factor drop below 1.5`
+   - `exit any memecoin down 25%`
+   - `always keep 100 USDC liquid`
+5. Toggle `autoExecute` on the rule. With it off: alerts + one-tap proposals. With it on: Echo executes via the session key inside the on-chain limits.
+6. **Revoke** any time from the session-key panel — that closes the on-chain SessionAuthorization and the encrypted key on Walrus is no longer usable.
+
+### Testing /onboard
+
+The `/onboard` flow ships testnet USDC from a dedicated funding wallet to a brand-new user — they don't need to own SUI to receive it.
+
+1. In the chat: `/onboard a friend with $5` (defaults to $1 if no amount given).
+2. Copy the returned invite link.
+3. Open the link in an incognito window.
+4. Sign in with Google (zkLogin). The WelcomePage auto-claims as soon as it has your session address.
+5. Watch for the `✓ Your $5 has arrived.` confirmation and the on-chain digest.
+
+Funds come from `VEKTOR_FUNDING_KEY` (testnet only). The claim endpoint hard-enforces: USDC coin type only, exact `invite.amount` (capped at 50), only to the address passed in the request body, single use per invite, and rate-limited to 5/min/IP.
+
 ## License
 
 MIT

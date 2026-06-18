@@ -1,7 +1,5 @@
 /* ─── Echo TypeScript types ────────────────────────────────────────────── */
 
-export type EchoMode = 'basic' | 'medium' | 'high'
-
 export interface EchoRule {
   id:           string
   raw:          string               // plain English as user typed
@@ -13,6 +11,9 @@ export interface EchoRule {
     params?:    Record<string, unknown>
   }
   active:       boolean
+  /** When true: executor runs the rule autonomously within session-key limits.
+   *  When false: a one-tap proposal is pushed and the user confirms manually. */
+  autoExecute:  boolean
   createdAt:    number
   lastTriggered?: number
 }
@@ -79,7 +80,6 @@ export interface SessionKeyMetadata {
 }
 
 export interface EchoUserData {
-  mode:              EchoMode
   rules:             EchoRule[]
   scheduledIntents:  ScheduledIntent[]
   conditions:        WatchCondition[]
@@ -91,7 +91,6 @@ export interface EchoUserData {
 }
 
 export const EMPTY_ECHO_DATA: EchoUserData = {
-  mode:             'basic',
   rules:            [],
   scheduledIntents: [],
   conditions:       [],
@@ -119,7 +118,6 @@ export interface EchoProposal {
 
 export interface EchoAlertMessage {
   type:      'echo_alert'
-  mode:      EchoMode
   message:   string
   timestamp: number
 }

@@ -78,10 +78,9 @@ export async function pushToUser(
 export async function pushAlert(
   userAddress: string,
   message:     string,
-  mode:        string,
   env:         Env,
 ): Promise<void> {
-  await pushToUser(userAddress, { type: 'echo_alert', mode, message, timestamp: Date.now() }, env)
+  await pushToUser(userAddress, { type: 'echo_alert', message, timestamp: Date.now() }, env)
 }
 
 export async function pushProposal(

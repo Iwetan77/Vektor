@@ -68,6 +68,13 @@ export interface InviteLink {
   createdAt:     string
   /** Number of times the invite URL has been opened. */
   uses:          number
+  /** Funding amount in human units (e.g. 5 = $5 USDC). */
+  amount:        number
+  token_symbol:  string
+  funded:        boolean
+  claimed:       boolean
+  claimedBy:     string | null
+  claimDigest:   string | null
 }
 
 export interface MemePosition {
@@ -241,17 +248,37 @@ export function closePosition(id: string, pnl: number): void {
 
 /* ─── Invite links ───────────────────────────────────────────────────────────── */
 
-export function createInviteLink(creatorWallet: string): InviteLink {
+export function createInviteLink(
+  creatorWallet: string,
+  amount: number = 1,
+  token_symbol: string = 'USDC',
+): InviteLink {
   const store  = load()
   const record: InviteLink = {
     token: uuid(),
     creatorWallet,
     createdAt: new Date().toISOString(),
     uses: 0,
+    amount,
+    token_symbol,
+    funded:      false,
+    claimed:     false,
+    claimedBy:   null,
+    claimDigest: null,
   }
   store.invites.push(record)
   save(store)
   return record
+}
+
+export function markInviteClaimed(token: string, claimedBy: string, digest: string): void {
+  const store = load()
+  const item = store.invites.find(i => i.token === token)
+  if (!item) return
+  item.claimed = true
+  item.claimedBy = claimedBy
+  item.claimDigest = digest
+  save(store)
 }
 
 export function getInviteLink(token: string): InviteLink | undefined {

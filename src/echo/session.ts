@@ -51,13 +51,11 @@ export function decryptSecret(blob: EncryptedBlob): Buffer {
   return Buffer.concat([decipher.update(ct), decipher.final()])
 }
 
-/* ─── Mode limits (in MIST: 1 SUI = 1e9 MIST) ─────────────────────────── */
-// Using USD-equivalent USDC base units (6 decimals):
-// $100 per tx / $500 per day for medium
-// $10k per tx / $50k per day for high
-export const MODE_LIMITS = {
-  medium: { maxPerTx: 100_000_000n,     maxPerDay: 500_000_000n   },    // $100 / $500 in USDC micros
-  high:   { maxPerTx: 10_000_000_000n,  maxPerDay: 50_000_000_000n },   // $10k / $50k
+/* ─── Session limits (USDC base units, 6 decimals) ────────────────────── */
+// Single tier — Echo is one mode now. Caller can override at session-key create.
+export const DEFAULT_LIMITS = {
+  maxPerTx:  10_000_000_000n,   // $10k
+  maxPerDay: 50_000_000_000n,   // $50k
 } as const
 
 /* ─── Generate a new ephemeral session keypair ─────────────────────────── */

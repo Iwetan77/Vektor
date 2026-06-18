@@ -1,12 +1,10 @@
 /**
- * Echo executor — calls the Vektor backend /api/echo/:wallet/execute endpoint
- * to perform an autonomous swap signed by the session key. The backend holds
- * the encrypted session key (Walrus + AES-256-GCM) and owns the Sui RPC.
- *
- * MEDIUM mode is propose-and-confirm and does NOT call this path.
+ * Echo executor — gates execution per RULE via rule.autoExecute.
+ *   autoExecute:true  → call backend /api/echo/:wallet/execute (session key signs).
+ *   autoExecute:false → pushProposal for one-tap user confirm.
  */
 
-import { pushExecuted } from './alerter'
+import { pushExecuted, pushProposal } from './alerter'
 import type { EchoUser, Env, EchoRule } from './types'
 import type { State }  from './evaluator'
 
@@ -60,7 +58,7 @@ export async function executeWithSessionKey(opts: {
   return digest
 }
 
-/** Execute a rule that has been evaluated as true */
+/** Execute or propose a rule. Gated by rule.autoExecute. */
 export async function executeRule(
   rule:  EchoRule,
   user:  EchoUser,
@@ -69,8 +67,19 @@ export async function executeRule(
 ): Promise<void> {
   const description = rule.parsed.action ?? rule.raw
   const params = paramsFromRule(rule)
+
+  if (!rule.autoExecute) {
+    await pushProposal(user.address, {
+      id:          rule.id,
+      description,
+      reason:      `Rule "${rule.raw}" triggered — confirm to execute`,
+      expiresAt:   Date.now() + 600_000,
+    }, env).catch(() => {})
+    return
+  }
+
   if (!params) {
-    await pushExecuted(user.address, description, '', undefined, env).catch(() => {})
+    await pushExecuted(user.address, `${description} (no params)`, '', undefined, env).catch(() => {})
     return
   }
   try {

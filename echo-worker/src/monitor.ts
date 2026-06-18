@@ -5,7 +5,7 @@
  */
 
 import { readEchoData }                               from './walrus'
-import { runBasicChecks, runMediumChecks, runHighChecks } from './evaluator'
+import { runChecks }                                  from './evaluator'
 import { executeRule, executeScheduledIntent }        from './executor'
 import type { EchoUser, Env }                         from './types'
 
@@ -98,47 +98,91 @@ async function fetchPrices(assets: string[]): Promise<Record<string, number>> {
   }
 }
 
+/* ─── Live data fetch via internal backend endpoints ──────────────────── */
+
+async function fetchLiveHealthFactor(wallet: string, env: Env): Promise<number | null> {
+  const baseUrl = (env as Env & { VEKTOR_BACKEND_URL?: string }).VEKTOR_BACKEND_URL
+    ?? 'http://localhost:3001'
+  const secret = (env as Env & { ECHO_WORKER_SECRET?: string }).ECHO_WORKER_SECRET ?? ''
+  try {
+    const res = await fetch(`${baseUrl}/api/internal/health-factor/${wallet}`, {
+      headers: { 'x-echo-worker-secret': secret },
+    })
+    const body = await res.json() as { ok?: boolean; healthFactor?: number | null }
+    return body?.healthFactor ?? null
+  } catch { return null }
+}
+
+async function fetchLivePortfolio(wallet: string, env: Env): Promise<{
+  totalUsd: number
+  tokens: Array<{ symbol: string; amount: number; usdValue: number }>
+  healthFactor: number | null
+}> {
+  const baseUrl = (env as Env & { VEKTOR_BACKEND_URL?: string }).VEKTOR_BACKEND_URL
+    ?? 'http://localhost:3001'
+  const secret = (env as Env & { ECHO_WORKER_SECRET?: string }).ECHO_WORKER_SECRET ?? ''
+  try {
+    const res = await fetch(`${baseUrl}/api/internal/portfolio/${wallet}`, {
+      headers: { 'x-echo-worker-secret': secret },
+    })
+    const body = await res.json() as {
+      ok?: boolean; totalUsd?: number
+      tokens?: Array<{ symbol: string; amount: number; usdValue: number }>
+      healthFactor?: number | null
+    }
+    return {
+      totalUsd:     body?.totalUsd ?? 0,
+      tokens:       body?.tokens ?? [],
+      healthFactor: body?.healthFactor ?? null,
+    }
+  } catch {
+    const hf: number | null = null
+    return { totalUsd: 0, tokens: [], healthFactor: hf }
+  }
+}
+
 /* ─── Process one user ───────────────────────────────────────────────────── */
 
 async function processUser(user: EchoUser, env: Env): Promise<void> {
   try {
-    const prices      = await fetchPrices(user.watchedAssets)
-    const state = {
-      portfolio: {
-        totalUsd:     0,
-        tokens:       user.echoData.positions.map(p => ({
+    const prices = await fetchPrices(user.watchedAssets)
+    const [livePortfolio, liveHf] = await Promise.all([
+      fetchLivePortfolio(user.address, env),
+      fetchLiveHealthFactor(user.address, env),
+    ])
+
+    const tokens = livePortfolio.tokens.length > 0
+      ? livePortfolio.tokens.map(t => ({
+          symbol:          t.symbol,
+          usdValue:        t.usdValue,
+          amount:          t.amount,
+          inYieldPosition: false,
+        }))
+      : user.echoData.positions.map(p => ({
           symbol:          p.token,
           usdValue:        (prices[p.token] ?? p.currentPrice) * p.amount,
           amount:          p.amount,
           inYieldPosition: false,
-        })),
-        healthFactor: null as number | null,
-      },
+        }))
+
+    const healthFactor = liveHf ?? livePortfolio.healthFactor
+    const state = {
+      portfolio: { totalUsd: livePortfolio.totalUsd, tokens, healthFactor },
       prices,
-      healthFactor: null as number | null,
+      healthFactor,
     }
 
-    switch (user.echoData.mode) {
-      case 'basic':
-        await runBasicChecks(user, state, env)
-        break
-      case 'medium':
-        await runMediumChecks(user, state, env)
-        break
-      case 'high':
-        await runHighChecks(user, state, env)
-        // Execute due scheduled intents
-        const now = Date.now()
-        for (const intent of user.echoData.scheduledIntents) {
-          if (intent.active && intent.nextExecution <= now + 60_000) {
-            await executeScheduledIntent(user, intent.id, env).catch(() => {})
-          }
-        }
-        // Execute triggered rules
-        for (const rule of user.echoData.rules.filter(r => r.active)) {
-          await executeRule(rule, user, state, env).catch(() => {})
-        }
-        break
+    // ONE Echo — full check set always. Execution is gated per-rule via autoExecute.
+    await runChecks(user, state, env)
+
+    const now = Date.now()
+    for (const intent of user.echoData.scheduledIntents) {
+      if (intent.active && intent.nextExecution <= now + 60_000) {
+        await executeScheduledIntent(user, intent.id, env).catch(() => {})
+      }
+    }
+    for (const rule of user.echoData.rules.filter(r => r.active)) {
+      await executeRule(rule, user, state, env).catch(() => {})
     }
   } catch (err) {
     console.error(`Echo failed for ${user.address}:`, err)

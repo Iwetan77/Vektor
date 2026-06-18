@@ -1,5 +1,3 @@
-export type EchoMode = 'basic' | 'medium' | 'high'
-
 export interface EchoRule {
   id:           string
   raw:          string
@@ -11,6 +9,7 @@ export interface EchoRule {
     params?:    Record<string, unknown>
   }
   active:       boolean
+  autoExecute:  boolean
   createdAt:    number
   lastTriggered?: number
 }
@@ -43,7 +42,6 @@ export interface EchoScore {
 }
 
 export interface EchoUserData {
-  mode: EchoMode
   rules: EchoRule[]
   scheduledIntents: ScheduledIntent[]
   conditions: WatchCondition[]

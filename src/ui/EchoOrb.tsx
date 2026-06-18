@@ -1,22 +1,15 @@
 /**
- * EchoOrb — animated SVG orb that reflects Echo mode and alert state.
- *
- * basic   → static grey circle, subtle glow
- * medium  → soft blue pulse, breathing animation
- * high    → bright green pulse, faster animation
- * alert   → red glow, urgent pulse (overrides mode color)
+ * EchoOrb — animated SVG orb. Green pulse when active; red urgent pulse on alert.
  */
 
-import type { EchoMode } from '../echo/types.js'
-
 interface EchoOrbProps {
-  mode:    EchoMode
   alert?:  boolean
   score?:  number    // 0-100, shown as circular ring
   size?:   number    // px, default 160
 }
 
-export function EchoOrb({ mode, alert = false, score = 0, size = 160 }: EchoOrbProps) {
+export function EchoOrb({ alert = false, score = 0, size = 160 }: EchoOrbProps) {
+  const mode = 'echo'
   const r      = size / 2
   const cx     = r
   const cy     = r
@@ -29,11 +22,7 @@ export function EchoOrb({ mode, alert = false, score = 0, size = 160 }: EchoOrbP
   // Colors
   const orb = alert
     ? { base: '#ef4444', glow: '#ef4444', ring: '#f87171', speed: '0.7s' }
-    : mode === 'high'
-    ? { base: '#22c55e', glow: '#22c55e', ring: '#86efac', speed: '1.4s' }
-    : mode === 'medium'
-    ? { base: '#3b82f6', glow: '#3b82f6', ring: '#93c5fd', speed: '2.2s' }
-    : { base: '#475569', glow: '#64748b', ring: '#94a3b8', speed: '0s'  }
+    : { base: '#22c55e', glow: '#22c55e', ring: '#86efac', speed: '1.4s' }
 
   const animId = `pulse-${mode}${alert ? '-alert' : ''}`
 

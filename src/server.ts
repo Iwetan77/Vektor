@@ -41,7 +41,7 @@ import {
   addScheduled, getScheduled, cancelScheduled, getAllScheduled, getScheduledById,
   addCondition, getConditions, cancelCondition,
   getPositions, addPosition, cancelCondition as removeCondition,
-  createInviteLink, getInviteLink, touchInviteLink,
+  createInviteLink, getInviteLink, touchInviteLink, markInviteClaimed,
 } from './db/store.js'
 import {
   getMemory, saveMemory, buildMemoryContext,
@@ -55,7 +55,7 @@ import { startAlertMonitor, registerWallet }     from './alerts/monitor.js'
 import { readEchoData, writeEchoData }           from './echo/walrus.js'
 import { calculateEchoScore, scoreInsights }     from './echo/score.js'
 import { parseRule }                             from './echo/rules.js'
-import { generateSessionKeypair, storeSessionKey, buildSessionAuthPtb, MODE_LIMITS } from './echo/session.js'
+import { generateSessionKeypair, storeSessionKey, buildSessionAuthPtb, DEFAULT_LIMITS } from './echo/session.js'
 import { requireWalletSig, requireWalletSigOrWorkerSecret } from './middleware/requireWalletSig.js'
 import { getConditionById } from './db/store.js'
 
@@ -234,30 +234,43 @@ app.post('/api/intent', async (req, res) => {
     // ── Fast-path: /onboard command — skip LLM parsing ──────────────────────
     if (/^\/?onboard\b/i.test(text.trim())) {
       const BASE = process.env.VEKTOR_URL ?? 'http://localhost:5173'
-      let inviteLink: string | null = null
-      if (sender !== SIM_ADDR) {
-        const invite = createInviteLink(sender)
-        inviteLink   = `${BASE}?invite=${invite.token}`
+
+      // Parse amount: "$5", "5 USDC", "with 5", "with $5"
+      let amount = 1
+      const dollarMatch  = text.match(/\$\s*(\d+(?:\.\d+)?)/)
+      const usdcMatch    = text.match(/(\d+(?:\.\d+)?)\s*USDC\b/i)
+      const withMatch    = text.match(/\bwith\s+\$?\s*(\d+(?:\.\d+)?)/i)
+      const matchedAmt   = dollarMatch?.[1] ?? usdcMatch?.[1] ?? withMatch?.[1]
+      if (matchedAmt) {
+        const n = parseFloat(matchedAmt)
+        if (Number.isFinite(n) && n > 0) amount = n
       }
-      const msg = [
-        '**Welcome to Vektor** — your Financial OS for Sui.',
-        '',
-        'Here\'s what you can do:',
-        '• **Swap** — "swap 10 USDC for SUI"',
-        '• **Lend / borrow** — "deposit 5 SUI on NAVI" · "borrow 20 USDC"',
-        '• **Automate** — "DCA $50 into SUI every week"',
-        '• **Conditions** — "sell half my SUI if price drops below $2"',
-        '• **Portfolio** — "check my balance" · "analyse my wallet"',
-        '',
-        inviteLink ? `Share Vektor with a friend: \`${inviteLink}\`` : 'Connect your wallet to get started.',
-      ].join('\n')
+
+      // Parse recipient name (anything after /onboard before "with"/"$"/"USDC")
+      const nameMatch = text.match(/^\/?onboard\s+([A-Za-z][A-Za-z0-9 _-]*?)(?:\s+with\b|\s*\$|\s+\d|\s*$)/i)
+      const recipient = nameMatch?.[1]?.trim() ?? null
+
+      let inviteLink: string | null = null
+      let invite: { token: string; amount: number } | null = null
+      if (sender !== SIM_ADDR) {
+        invite = createInviteLink(sender, amount, 'USDC')
+        inviteLink = `${BASE}?invite=${invite.token}`
+      }
+
+      const who = recipient ? recipient : 'a friend'
+      const msg = inviteLink
+        ? `Send this link to ${who} to claim $${amount} USDC: \`${inviteLink}\``
+        : 'Connect your wallet to create a funded invite.'
+
       res.json({
         ok:          true,
         intent_type: 'onboard',
         language:    'en',
         inviteLink,
+        amount,
+        recipient,
         message:     msg,
-        actionLabel: '· ONBOARD',
+        actionLabel: `· ONBOARD${recipient ? ` · ${recipient}` : ''} · $${amount} USDC`,
       })
       return
     }
@@ -1260,7 +1273,106 @@ app.post('/api/onboard/link', (req, res) => {
 app.get('/api/onboard/:token', (req, res) => {
   const invite = touchInviteLink(req.params.token)
   if (!invite) { res.status(404).json({ ok: false, error: 'Invite not found or expired' }); return }
-  res.json({ ok: true, invite: { creatorWallet: invite.creatorWallet, createdAt: invite.createdAt, uses: invite.uses } })
+  res.json({ ok: true, invite: {
+    creatorWallet: invite.creatorWallet,
+    createdAt:     invite.createdAt,
+    uses:          invite.uses,
+    amount:        invite.amount,
+    token_symbol:  invite.token_symbol,
+    claimed:       invite.claimed,
+  } })
+})
+
+/* ─── Claim a funded invite — testnet USDC from VEKTOR_FUNDING_KEY ────── */
+
+// HARD CONSTRAINTS, enforced by the handler below:
+//   • Coin type:        USDC only (TESTNET_USDC_COIN_TYPE)
+//   • Amount:           exactly invite.amount, sanity-capped at 50 USDC
+//   • Recipient:        only the body's recipientAddress, no other target
+//   • One-shot:         rejects if already claimed
+const TESTNET_USDC_COIN_TYPE =
+  '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC'
+
+const claimLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max:      5,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  message:  { ok: false, error: 'claim rate limit exceeded' },
+})
+
+app.post('/api/onboard/:token/claim', claimLimiter, async (req, res) => {
+  try {
+    const { recipientAddress } = req.body as { recipientAddress?: string }
+    if (!recipientAddress || !/^0x[0-9a-fA-F]{1,64}$/.test(recipientAddress)) {
+      res.status(400).json({ ok: false, error: 'recipientAddress required (hex Sui address)' }); return
+    }
+
+    const invite = getInviteLink(String(req.params.token))
+    if (!invite) { res.status(404).json({ ok: false, error: 'Invite not found' }); return }
+    if (invite.claimed) { res.status(409).json({ ok: false, error: 'Invite already claimed' }); return }
+    if (invite.amount <= 0 || invite.amount > 50) {
+      res.status(400).json({ ok: false, error: 'Invite amount out of allowed range (0, 50] USDC' }); return
+    }
+    if ((invite.token_symbol ?? 'USDC').toUpperCase() !== 'USDC') {
+      res.status(400).json({ ok: false, error: 'Only USDC invites are supported' }); return
+    }
+
+    const fundingKey = process.env.VEKTOR_FUNDING_KEY
+    if (!fundingKey) { res.status(503).json({ ok: false, error: 'VEKTOR_FUNDING_KEY not configured' }); return }
+
+    const [ed25519Mod, cryptoMod, clientMod, txMod] = await Promise.all([
+      import('@mysten/sui/keypairs/ed25519'),
+      import('@mysten/sui/cryptography'),
+      import('@mysten/sui/client'),
+      import('@mysten/sui/transactions'),
+    ])
+    const Ed25519Keypair    = (ed25519Mod as any).Ed25519Keypair
+    const decodeSuiPrivateKey = (cryptoMod as any).decodeSuiPrivateKey
+    const SuiClient         = (clientMod as any).SuiClient
+    const getFullnodeUrl    = (clientMod as any).getFullnodeUrl
+    const Transaction       = (txMod as any).Transaction
+
+    const { secretKey } = decodeSuiPrivateKey(fundingKey)
+    const keypair = Ed25519Keypair.fromSecretKey(secretKey)
+    const sender  = keypair.getPublicKey().toSuiAddress()
+    const network = (process.env.SUI_NETWORK ?? 'testnet') as 'testnet' | 'mainnet' | 'devnet'
+    const client  = new SuiClient({ url: getFullnodeUrl(network) })
+
+    const USDC_DECIMALS = 6
+    const amountBase = BigInt(Math.round(invite.amount * 10 ** USDC_DECIMALS))
+
+    // Pull USDC coin objects owned by the funding wallet
+    const coins = await client.getCoins({ owner: sender, coinType: TESTNET_USDC_COIN_TYPE, limit: 50 })
+    if (coins.data.length === 0) {
+      res.status(503).json({ ok: false, error: 'Funding wallet has no USDC coin objects' }); return
+    }
+
+    const tx = new Transaction()
+    tx.setSender(sender)
+    const primary = tx.object(coins.data[0].coinObjectId)
+    if (coins.data.length > 1) {
+      tx.mergeCoins(primary, coins.data.slice(1).map((c: { coinObjectId: string }) => tx.object(c.coinObjectId)))
+    }
+    const [transferCoin] = tx.splitCoins(primary, [tx.pure.u64(amountBase)])
+    tx.transferObjects([transferCoin], tx.pure.address(recipientAddress))
+
+    const result = await client.signAndExecuteTransaction({
+      signer:      keypair,
+      transaction: tx,
+      options:     { showEffects: true },
+    })
+
+    if (result.effects?.status?.status !== 'success') {
+      res.status(500).json({ ok: false, error: `claim tx failed: ${result.effects?.status?.error ?? 'unknown'}` }); return
+    }
+
+    markInviteClaimed(String(req.params.token), recipientAddress, result.digest)
+    res.json({ ok: true, digest: result.digest, amount: invite.amount, recipient: recipientAddress })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    res.status(500).json({ ok: false, error: msg })
+  }
 })
 
 /* ─── Payments ───────────────────────────────────────────────────────── */
@@ -1719,37 +1831,21 @@ app.get('/api/echo/:wallet', async (req, res) => {
   }
 })
 
-// POST /api/echo/:wallet/mode — switch mode
-app.post('/api/echo/:wallet/mode', requireWalletSig(), async (req, res) => {
-  try {
-    const { mode } = req.body as { mode: 'basic' | 'medium' | 'high' }
-    if (!['basic', 'medium', 'high'].includes(mode)) {
-      res.status(400).json({ ok: false, error: 'Invalid mode' }); return
-    }
-    const data = await readEchoData(req.params.wallet)
-    data.mode  = mode
-    await writeEchoData(req.params.wallet, data)
-    res.json({ ok: true, mode })
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    res.status(500).json({ ok: false, error: msg })
-  }
-})
-
 // POST /api/echo/:wallet/rules — parse + add a rule
 app.post('/api/echo/:wallet/rules', requireWalletSig(), async (req, res) => {
   try {
-    const { raw } = req.body as { raw: string }
+    const { raw, autoExecute } = req.body as { raw: string; autoExecute?: boolean }
     if (!raw?.trim()) { res.status(400).json({ ok: false, error: 'Rule text required' }); return }
 
     const { parsed, interpretation } = await parseRule(raw.trim())
 
     const rule: EchoRule = {
-      id:        crypto.randomUUID(),
-      raw:       raw.trim(),
+      id:          crypto.randomUUID(),
+      raw:         raw.trim(),
       parsed,
-      active:    true,
-      createdAt: Date.now(),
+      active:      true,
+      autoExecute: Boolean(autoExecute),
+      createdAt:   Date.now(),
     }
 
     const data = await readEchoData(req.params.wallet)
@@ -1795,16 +1891,20 @@ app.post('/api/echo/:wallet/score', requireWalletSig(), async (req, res) => {
 // POST /api/echo/:wallet/session-key — generate ephemeral keypair + return PTB for user to sign
 app.post('/api/echo/:wallet/session-key', requireWalletSig(), async (req, res) => {
   try {
-    const { mode, packageId, expiryDays = 7 } = req.body as {
-      mode:      'medium' | 'high'
+    const { packageId, expiryDays = 7, maxPerTx, maxPerDay } = req.body as {
       packageId: string
       expiryDays?: number
+      maxPerTx?: string
+      maxPerDay?: string
     }
     if (!packageId) { res.status(400).json({ ok: false, error: 'packageId required' }); return }
 
     const keypair    = generateSessionKeypair()
     const sessionAddr = keypair.getPublicKey().toSuiAddress()
-    const limits     = MODE_LIMITS[mode]
+    const limits = {
+      maxPerTx:  maxPerTx  ? BigInt(maxPerTx)  : DEFAULT_LIMITS.maxPerTx,
+      maxPerDay: maxPerDay ? BigInt(maxPerDay) : DEFAULT_LIMITS.maxPerDay,
+    }
     const expiresAt  = Date.now() + expiryDays * 24 * 60 * 60 * 1000
 
     // Store private key on Walrus
@@ -1860,6 +1960,43 @@ app.delete('/api/echo/:wallet/session-key', requireWalletSig(), async (req, res)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     res.status(500).json({ ok: false, error: msg })
+  }
+})
+
+/* ─── Internal worker endpoints (X-Echo-Worker-Secret only) ──────────── */
+
+const requireWorkerSecret: express.RequestHandler<any> = (req, res, next) => {
+  const secret = process.env.ECHO_WORKER_SECRET
+  const provided = req.header('x-echo-worker-secret')
+  if (!secret) { res.status(503).json({ ok: false, error: 'ECHO_WORKER_SECRET not configured' }); return }
+  if (provided !== secret) { res.status(401).json({ ok: false, error: 'unauthorized' }); return }
+  next()
+}
+
+app.get('/api/internal/health-factor/:wallet', requireWorkerSecret, async (req, res) => {
+  try {
+    const hf = await getHealthFactor(req.params.wallet)
+    res.json({ ok: true, healthFactor: hf })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) })
+  }
+})
+
+app.get('/api/internal/portfolio/:wallet', requireWorkerSecret, async (req, res) => {
+  try {
+    const snap = await fetchPortfolio(req.params.wallet)
+    res.json({
+      ok: true,
+      totalUsd: snap.totalUsd,
+      tokens: snap.balances.map(b => ({
+        symbol:   b.symbol,
+        amount:   Number(b.formatted),
+        usdValue: b.usdValue,
+      })),
+      healthFactor: snap.navi?.healthFactor ?? null,
+    })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) })
   }
 })
 

@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { ConnectModal }        from '@mysten/dapp-kit'
+import { ConnectModal, useCurrentAccount } from '@mysten/dapp-kit'
 
 // ─── Feature cards ────────────────────────────────────────────────────────────
 
@@ -54,6 +54,16 @@ interface Props {
   onZkLogin?:     () => void
   zkAvailable?:   boolean
   onEnterApp?:    () => void
+  /** Address of the signed-in zkLogin session, if available. */
+  signedInAddress?: string | null
+}
+
+interface Invite {
+  creatorWallet: string
+  createdAt:     string
+  amount:        number
+  token_symbol:  string
+  claimed:       boolean
 }
 
 export function WelcomePage({
@@ -63,9 +73,16 @@ export function WelcomePage({
   onZkLogin,
   zkAvailable,
   onEnterApp,
+  signedInAddress,
 }: Props) {
-  const [invite, setInvite] = useState<{ creatorWallet: string; createdAt: string } | null>(null)
+  const [invite, setInvite] = useState<Invite | null>(null)
   const [inviteLoading, setInviteLoading] = useState(!!token)
+  const [claim, setClaim] = useState<
+    { state: 'idle' } | { state: 'pending' } | { state: 'done'; digest: string; amount: number } | { state: 'error'; error: string }
+  >({ state: 'idle' })
+
+  const account = useCurrentAccount()
+  const recipient = signedInAddress ?? account?.address ?? null
 
   useEffect(() => {
     if (!token) return
@@ -75,6 +92,24 @@ export function WelcomePage({
       .catch(() => {})
       .finally(() => setInviteLoading(false))
   }, [token])
+
+  // Auto-claim once we have both an invite and a recipient address.
+  useEffect(() => {
+    if (!token || !invite || invite.claimed || !recipient) return
+    if (claim.state !== 'idle') return
+    setClaim({ state: 'pending' })
+    fetch(`/api/onboard/${token}/claim`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ recipientAddress: recipient }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok && d.digest) setClaim({ state: 'done', digest: d.digest, amount: d.amount })
+        else setClaim({ state: 'error', error: d.error ?? 'claim failed' })
+      })
+      .catch(e => setClaim({ state: 'error', error: e instanceof Error ? e.message : String(e) }))
+  }, [token, invite, recipient, claim.state])
 
   const shortWallet = invite
     ? `${invite.creatorWallet.slice(0, 6)}…${invite.creatorWallet.slice(-4)}`
@@ -93,7 +128,25 @@ export function WelcomePage({
       {token && !inviteLoading && invite && (
         <div className="mb-8 px-5 py-3 rounded-full border border-purple-500/30 bg-purple-500/10 text-sm text-purple-300">
           <span className="font-mono text-white/60">{shortWallet}</span>
-          {' '}invited you to Vektor
+          {' '}invited you to Vektor with ${invite.amount} {invite.token_symbol}
+        </div>
+      )}
+
+      {/* Claim status */}
+      {token && invite && claim.state === 'pending' && (
+        <div className="mb-6 px-5 py-3 rounded-xl border border-blue-500/20 bg-blue-500/5 text-sm text-blue-200">
+          Sending your ${invite.amount} {invite.token_symbol}…
+        </div>
+      )}
+      {token && claim.state === 'done' && (
+        <div className="mb-6 px-5 py-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-sm text-emerald-200">
+          ✓ Your ${claim.amount} has arrived.
+          <span className="block text-[10px] text-emerald-300/70 font-mono mt-1">tx: {claim.digest}</span>
+        </div>
+      )}
+      {token && claim.state === 'error' && (
+        <div className="mb-6 px-5 py-3 rounded-xl border border-red-500/30 bg-red-500/10 text-sm text-red-300">
+          Claim failed: {claim.error}
         </div>
       )}
 

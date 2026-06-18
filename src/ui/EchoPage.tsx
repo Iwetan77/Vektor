@@ -7,7 +7,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useCurrentAccount }                        from '@mysten/dapp-kit'
 import { EchoOrb }                                  from './EchoOrb'
 import type {
-  EchoUserData, EchoMode, EchoRule,
+  EchoUserData, EchoRule,
   WatchCondition, ScheduledIntent, MonitoredPosition,
   EchoActivity, EchoScore, EchoWsMessage,
 } from '../echo/types'
@@ -369,60 +369,19 @@ function RulesEditor({
   )
 }
 
-/* ─── Mode toggle ─────────────────────────────────────────────────────── */
-
-const MODE_META = {
-  basic:  { label: 'Basic',  desc: 'Watch & alert only',              color: 'text-slate-400' },
-  medium: { label: 'Medium', desc: 'Propose transactions for approval', color: 'text-blue-400'  },
-  high:   { label: 'High',   desc: 'Execute autonomously within limits', color: 'text-emerald-400' },
-}
-
-function ModeToggle({
-  current,
-  onChange,
-  saving,
-}: {
-  current: EchoMode
-  onChange: (m: EchoMode) => void
-  saving:  boolean
-}) {
-  return (
-    <div className="flex items-center gap-1 bg-[#111118] border border-white/8 rounded-full p-1">
-      {(Object.keys(MODE_META) as EchoMode[]).map(m => (
-        <button
-          key={m}
-          onClick={() => onChange(m)}
-          disabled={saving}
-          className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${
-            current === m
-              ? `bg-[#1a1a2e] border border-white/10 ${MODE_META[m].color}`
-              : 'text-slate-600 hover:text-slate-400'
-          }`}
-        >
-          {MODE_META[m].label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 /* ─── Session key panel ───────────────────────────────────────────────── */
 
 function SessionKeyPanel({
   wallet,
-  mode,
   metadata,
   packageId,
   onRevoke,
 }: {
   wallet:    string
-  mode:      EchoMode
   metadata?: { authObjectId: string; expiresAt: number; maxAmountPerTx: number; maxAmountPerDay: number }
   packageId: string
   onRevoke:  () => void
 }) {
-  if (mode === 'basic') return null
-
   const [revoking, setRevoking] = useState(false)
 
   async function handleRevoke() {
@@ -437,9 +396,9 @@ function SessionKeyPanel({
 
   if (!metadata) return (
     <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 px-4 py-3 text-xs text-yellow-300">
-      No session key active — {mode === 'medium' ? 'proposal execution' : 'autonomous execution'} requires a session key.
+      No session key active — autonomous rules (autoExecute) require a session key.
       <br/>
-      <span className="text-slate-500 text-[10px]">Session key creation requires signing a transaction in your wallet. Coming in next step.</span>
+      <span className="text-slate-500 text-[10px]">Session key creation requires signing a transaction in your wallet.</span>
     </div>
   )
 
@@ -482,7 +441,6 @@ export default function EchoPage({ wsAlerts }: EchoPageProps) {
 
   const [data,       setData]       = useState<EchoUserData | null>(null)
   const [loading,    setLoading]    = useState(true)
-  const [savingMode, setSavingMode] = useState(false)
   const [err,        setErr]        = useState<string | null>(null)
   const [hasAlert,   setHasAlert]   = useState(false)
 
@@ -514,34 +472,6 @@ export default function EchoPage({ wsAlerts }: EchoPageProps) {
     const t = setTimeout(() => setHasAlert(false), 8000)
     return () => clearTimeout(t)
   }, [wsAlerts])
-
-  async function handleModeChange(mode: EchoMode) {
-    if (!wallet || !data) return
-    if (mode === data.mode) return
-    if (mode !== 'basic') {
-      const ok = window.confirm(
-        mode === 'high'
-          ? 'High mode allows Echo to execute transactions autonomously within your spending limits. A session key signature is required. Continue?'
-          : 'Medium mode allows Echo to build and propose transactions. You approve each one before execution. Continue?'
-      )
-      if (!ok) return
-    }
-    setSavingMode(true)
-    try {
-      const res  = await fetch(`/api/echo/${wallet}/mode`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ mode }),
-      })
-      const json = await res.json()
-      if (!json.ok) throw new Error(json.error)
-      setData(prev => prev ? { ...prev, mode } : prev)
-    } catch (e: any) {
-      setErr(e.message)
-    } finally {
-      setSavingMode(false)
-    }
-  }
 
   if (!wallet) {
     return (
@@ -577,7 +507,6 @@ export default function EchoPage({ wsAlerts }: EchoPageProps) {
         {/* ── Top section: orb + mode + score ─────────────────────────── */}
         <div className="flex flex-col items-center gap-6">
           <EchoOrb
-            mode={data.mode}
             alert={hasAlert}
             score={data.echoScore.total}
             size={160}
@@ -585,16 +514,13 @@ export default function EchoPage({ wsAlerts }: EchoPageProps) {
 
           <div className="text-center space-y-1">
             <p className="text-white font-semibold tracking-tight">Vektor Echo</p>
-            <p className="text-xs text-slate-500">{MODE_META[data.mode].desc}</p>
+            <p className="text-xs text-slate-500">Watches your portfolio. Rules with autoExecute run autonomously within session limits.</p>
           </div>
-
-          <ModeToggle current={data.mode} onChange={handleModeChange} saving={savingMode} />
 
           {/* Session key status */}
           <div className="w-full max-w-md">
             <SessionKeyPanel
               wallet={wallet}
-              mode={data.mode}
               metadata={data.sessionKeyMetadata as any}
               packageId={packageId}
               onRevoke={loadData}
@@ -646,7 +572,7 @@ export default function EchoPage({ wsAlerts }: EchoPageProps) {
         />
 
         <p className="text-center text-[10px] text-slate-700 pb-4">
-          Echo · Walrus storage · Cloudflare Worker · {data.mode} mode
+          Echo · Walrus storage · Cloudflare Worker
         </p>
       </div>
     </div>
