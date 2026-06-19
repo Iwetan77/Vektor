@@ -226,7 +226,7 @@ export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
               {/* Add contact form */}
               <form onSubmit={handleAddContact} className="rounded-xl border border-white/8 bg-[#111118] p-4 space-y-3">
                 <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500">New Contact</p>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                   <input
                     value={addName}
                     onChange={e => setAddName(e.target.value)}

@@ -166,7 +166,7 @@ export function GuardianReport({ report, rewriting, wasRewritten, diff, onFix }:
           <div className="border-t border-[#1e1e2e]" />
           <div className="space-y-2">
             <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500">Rewrite Comparison</p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {/* Before */}
               <div className="rounded-lg bg-red-500/5 border border-red-500/15 p-3 space-y-2">
                 <p className="text-[9px] font-mono uppercase tracking-widest text-red-400">Before</p>

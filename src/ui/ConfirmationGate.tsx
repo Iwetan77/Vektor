@@ -202,7 +202,7 @@ export function ConfirmationGate({ report, quote, parsedIntent, state, onConfirm
           </span>
         </div>
 
-        <div className="flex items-center gap-4 text-xs text-slate-500">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
           <span>Guardian score: <span className="text-slate-300 font-mono">{report.score}/100</span></span>
           <span>Route: <span className="text-slate-300">{quote.routeLabel}</span></span>
           <span>Gas: <span className="text-slate-300 font-mono">~{quote.gasEstimateFormatted} SUI</span></span>

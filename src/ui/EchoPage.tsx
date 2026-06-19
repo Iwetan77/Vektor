@@ -146,7 +146,7 @@ function PositionsPanel({ positions }: { positions: MonitoredPosition[] }) {
                   {positive ? '+' : ''}{(pnlPct * 100).toFixed(2)}% (${pnlUsd.toFixed(2)})
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-500">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[10px] text-slate-500">
                 <span>Entry: <span className="text-slate-300 font-mono">${p.entryPrice.toFixed(4)}</span></span>
                 <span>Now: <span className="text-slate-300 font-mono">${p.currentPrice.toFixed(4)}</span></span>
                 {p.stopLoss && <span>Stop: <span className="text-red-400 font-mono">${p.stopLoss.toFixed(4)}</span></span>}

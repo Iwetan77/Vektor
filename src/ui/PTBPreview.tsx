@@ -64,7 +64,7 @@ export function PTBPreview({ parsedIntent, quote, originalText }: Props) {
       </div>
 
       {/* Outcome */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="rounded-lg bg-slate-900/60 border border-[#1e1e2e] p-4 space-y-1">
           <p className="text-xs text-slate-500">Expected output</p>
           <p className="text-lg font-bold text-white tabular-nums">

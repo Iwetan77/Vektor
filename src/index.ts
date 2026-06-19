@@ -160,8 +160,6 @@ export type {
 export { RiskClass } from './types.js'
 export type { RiskFlag, LogEntry, ZkLoginSession } from './types.js'
 
-// zkLogin exported separately — it's optional and has heavier deps
-export { ZkLoginAuth } from './auth/zklogin.js'
-export type { ZkLoginProviderConfig } from './auth/zklogin.js'
+// zkLogin: see src/auth/zklogin-core/* for the new server rail and src/ui/useZkLogin.ts for the client hook.
 
 export default Vektor

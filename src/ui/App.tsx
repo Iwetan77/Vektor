@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { ConnectModal, useCurrentAccount, useDisconnectWallet, useSuiClientQuery, useSignAndExecuteTransaction } from '@mysten/dapp-kit'
 import { Transaction } from '@mysten/sui/transactions'
+import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from '@mysten/sui/jsonRpc'
+import { toBase64 } from '@mysten/sui/utils'
 import { PTBPreview }       from './PTBPreview.js'
 import { GuardianReport }   from './GuardianReport.js'
 import { ConfirmationGate } from './ConfirmationGate.js'
@@ -9,6 +11,7 @@ import { ContactsPage }     from './ContactsPage.js'
 import { MicButton }        from './MicButton.js'
 import EchoPage             from './EchoPage.js'
 import { WelcomePage }      from './WelcomePage.js'
+import { LandingPage }      from './LandingPage.js'
 import { useZkLogin }       from './useZkLogin.js'
 import type { EchoWsMessage } from '../echo/types.js'
 
@@ -70,6 +73,119 @@ function VektorSymbol({ className }: { className?: string }) {
       <path fillRule="evenodd" clipRule="evenodd" d="M144.362 268.19L150.603 72.6186L108.901 71.2894L103.727 233.364L19.603 188.587L0 225.414L113.709 285.94L144.362 268.19Z" fill="currentColor"/>
       <path fillRule="evenodd" clipRule="evenodd" d="M260.413 19.603L215.633 103.727L377.711 108.901L376.381 150.603L180.81 144.362L163.06 113.709L223.586 0L260.413 19.603Z" fill="currentColor"/>
     </svg>
+  )
+}
+
+/* ─── zkLogin avatar + dropdown ────────────────────────────────────────── */
+
+function ZkAvatarMenu({
+  zkLogin,
+  addrCopied,
+  setAddrCopied,
+}: {
+  zkLogin: ReturnType<typeof useZkLogin>
+  addrCopied: boolean
+  setAddrCopied: (v: boolean) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [imgFailed, setImgFailed] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    window.addEventListener('mousedown', onClick)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onClick)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const user = zkLogin.user!
+  const initial = (user.name ?? user.email ?? 'V').trim().charAt(0).toUpperCase()
+  const addrShort = `${user.address.slice(0, 6)}…${user.address.slice(-4)}`
+
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        onClick={() => setOpen(v => !v)}
+        title={user.email ?? 'Account'}
+        className="flex items-center justify-center w-9 h-9 rounded-full border border-white/10 bg-[#111118] hover:border-purple-500/40 transition-colors overflow-hidden"
+      >
+        {user.picture && !imgFailed ? (
+          <img
+            src={user.picture}
+            alt=""
+            referrerPolicy="no-referrer"
+            onError={() => setImgFailed(true)}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <span className="text-sm font-semibold text-purple-300">{initial}</span>
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 mt-2 w-72 rounded-xl border border-white/10 bg-[#0e0e14] shadow-2xl shadow-black/60 z-50 overflow-hidden">
+          {/* Header — picture + name/email */}
+          <div className="flex items-center gap-3 p-3 border-b border-white/5">
+            <div className="w-10 h-10 rounded-full border border-white/10 bg-[#111118] overflow-hidden flex items-center justify-center shrink-0">
+              {user.picture && !imgFailed ? (
+                <img src={user.picture} alt="" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-base font-semibold text-purple-300">{initial}</span>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium text-white truncate">{user.name ?? user.email ?? 'Signed in'}</div>
+              {user.email && user.name && (
+                <div className="text-xs text-slate-500 truncate">{user.email}</div>
+              )}
+              <div className="text-[10px] font-mono text-slate-600 mt-0.5">via Google · zkLogin</div>
+            </div>
+          </div>
+
+          {/* Address */}
+          <div className="px-3 py-2.5 border-b border-white/5">
+            <div className="text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-1">Address</div>
+            <div className="text-xs font-mono text-slate-300">{addrShort}</div>
+          </div>
+
+          {/* Actions */}
+          <button
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(user.address)
+                setAddrCopied(true)
+                setTimeout(() => setAddrCopied(false), 1400)
+              } catch {}
+            }}
+            className="w-full text-left px-3 py-2.5 text-sm text-slate-300 hover:bg-white/5 transition-colors border-b border-white/5 flex items-center gap-2"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+              <rect x="9" y="9" width="11" height="11" rx="2" />
+              <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+            </svg>
+            {addrCopied ? <span className="text-emerald-400">Copied</span> : 'Copy address'}
+          </button>
+
+          <button
+            onClick={() => { setOpen(false); void zkLogin.signOut() }}
+            className="w-full text-left px-3 py-2.5 text-sm text-red-400 hover:bg-red-500/10 transition-colors flex items-center gap-2"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+              <path d="M16 17l5-5-5-5M21 12H9" />
+            </svg>
+            Sign out
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -151,7 +267,7 @@ function PortfolioCard({ portfolio }: { portfolio: any }) {
           </div>
         )}
       </div>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
         {(portfolio.balances ?? []).slice(0, 6).map((b: any) => (
           <div key={b.symbol} className="flex items-center justify-between px-3 py-2 rounded-lg bg-white/[0.03] border border-white/5">
             <span className="text-xs text-slate-400 font-medium">{b.symbol}</span>
@@ -246,7 +362,7 @@ function ScheduledCard({ payload }: { payload: any }) {
         <span className="text-purple-400">⏱</span>
         <span className="text-sm font-semibold text-white capitalize">{s.type === 'dca' ? 'DCA' : 'Scheduled Payment'} Created</span>
       </div>
-      <div className="grid grid-cols-2 gap-3 text-xs">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
         <div><p className="text-slate-500">Amount</p><p className="text-white">{s.amount} {s.token}{s.targetToken ? ` → ${s.targetToken}` : ''}</p></div>
         <div><p className="text-slate-500">Frequency</p><p className="text-white capitalize">{freqMap[s.schedule?.frequency] ?? s.schedule?.frequency}</p></div>
         <div><p className="text-slate-500">First run</p><p className="text-white">{new Date(s.schedule?.nextRun).toLocaleDateString()}</p></div>
@@ -340,7 +456,7 @@ function PaymentCard({ payload, paymentId }: { payload: any; paymentId?: string 
   return (
     <div className="rounded-xl border border-white/5 bg-[#111118] p-5 space-y-4">
       <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500">Payment Request</p>
-      <div className="grid grid-cols-2 gap-3 text-xs">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
         <div><p className="text-slate-500">Amount</p><p className="text-white">{payload?.payment?.amount} {payload?.payment?.token}</p></div>
         <div>
           <p className="text-slate-500">Status</p>
@@ -937,7 +1053,7 @@ export default function App() {
   // zkLogin — Google OAuth-based Sui address (alternative to wallet connect)
   const zkLogin = useZkLogin()
   // Unified address: prefer hardware wallet, fall back to zkLogin session
-  const effectiveAddress = account?.address ?? zkLogin.session?.address ?? null
+  const effectiveAddress = account?.address ?? zkLogin.user?.address ?? null
 
   // SUI balance — refreshes every 30 s
   const { data: suiBalanceData } = useSuiClientQuery(
@@ -971,6 +1087,7 @@ export default function App() {
   const [showWelcome, setShowWelcome] = useState(() => !!inviteToken)
 
   const [connectOpen,     setConnectOpen]     = useState(false)
+  const [addrCopied,      setAddrCopied]      = useState(false)
   const [messages,        setMessages]        = useState<ChatMessage[]>([])
   const [input,           setInput]           = useState('')
   const [portfolio,       setPortfolio]       = useState<any>(null)
@@ -980,6 +1097,7 @@ export default function App() {
   const [contactsOpen,    setContactsOpen]    = useState(false)
   const [showSlashMenu,   setShowSlashMenu]   = useState(false)
   const [currentPage,     setCurrentPage]     = useState<'chat' | 'echo'>('chat')
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [echoAlerts,      setEchoAlerts]      = useState<EchoWsMessage[]>([])
   const wsRef = useRef<WebSocket | null>(null)
 
@@ -1010,11 +1128,11 @@ export default function App() {
       .catch(() => {})
   }, [])
 
-  // On wallet connect: fetch portfolio + alerts + inject proactive welcome message
+  // On wallet/zkLogin sign-in: fetch portfolio + alerts + inject proactive welcome message
   useEffect(() => {
-    if (!account) { setPortfolio(null); setAlerts([]); return }
+    if (!effectiveAddress) { setPortfolio(null); setAlerts([]); return }
 
-    const wallet = account.address
+    const wallet = effectiveAddress
 
     // Live portfolio fetch — only update state if we got real balances back (not an empty/failed response)
     fetch('/api/portfolio', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet }) })
@@ -1045,7 +1163,7 @@ export default function App() {
 
           // Portfolio value
           if (mem.portfolioSnapshot?.totalUsd) {
-            parts.push(`Portfolio: **$${mem.portfolioSnapshot.totalUsd.toFixed(2)}**`)
+            parts.push(`Portfolio: $${mem.portfolioSnapshot.totalUsd.toFixed(2)}`)
           }
 
           // NAVI health factor with color hint
@@ -1071,7 +1189,10 @@ export default function App() {
           }
 
           if (parts.length > 0) {
-            const greeting = mem.stats?.totalIntents > 0 ? 'Welcome back.' : 'Wallet connected.'
+            const firstName = zkLogin.user?.givenName?.trim() || null
+            const greeting = mem.stats?.totalIntents > 0
+              ? (firstName ? `Welcome back, ${firstName}.` : 'Welcome back.')
+              : (firstName ? `Hey ${firstName} — wallet's ready.` : 'Wallet connected.')
             setMessages([{
               id:          crypto.randomUUID(),
               role:        'vektor',
@@ -1084,12 +1205,12 @@ export default function App() {
       })
       .catch(() => {})
 
-  }, [account?.address])
+  }, [effectiveAddress])
 
   // Poll for new alerts every 30 s (so scheduled payment notifications appear without reload)
   useEffect(() => {
-    if (!account) return
-    const wallet = account.address
+    if (!effectiveAddress) return
+    const wallet = effectiveAddress
     const poll = () => {
       fetch(`/api/alerts/${wallet}`)
         .then(r => r.json())
@@ -1099,17 +1220,17 @@ export default function App() {
     poll() // fetch immediately on connect
     const interval = setInterval(poll, 30_000)
     return () => clearInterval(interval)
-  }, [account?.address])
+  }, [effectiveAddress])
 
   // Echo WebSocket — connect when wallet is active
   useEffect(() => {
-    if (!account) { wsRef.current?.close(); wsRef.current = null; return }
+    if (!effectiveAddress) { wsRef.current?.close(); wsRef.current = null; return }
 
     const echoWorkerUrl = (import.meta as any).env?.VITE_ECHO_WORKER_URL
     if (!echoWorkerUrl) return  // not configured yet — skip
 
     function connect() {
-      const ws = new WebSocket(`${echoWorkerUrl}/ws/${account!.address}`)
+      const ws = new WebSocket(`${echoWorkerUrl}/ws/${effectiveAddress}`)
       wsRef.current = ws
 
       ws.onmessage = (evt) => {
@@ -1128,7 +1249,7 @@ export default function App() {
 
     connect()
     return () => { wsRef.current?.close(); wsRef.current = null }
-  }, [account?.address])
+  }, [effectiveAddress])
 
   function autoResize(el: HTMLTextAreaElement) {
     el.style.height = 'auto'
@@ -1136,8 +1257,8 @@ export default function App() {
   }
 
   const refreshPortfolio = useCallback(() => {
-    if (!account) return
-    fetch('/api/portfolio', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: account.address }) })
+    if (!effectiveAddress) return
+    fetch('/api/portfolio', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wallet: effectiveAddress }) })
       .then(r => r.json())
       .then(d => {
         // Only update if we got real data — never overwrite a good portfolio with an empty one
@@ -1146,7 +1267,7 @@ export default function App() {
         }
       })
       .catch(() => {})
-  }, [account])
+  }, [effectiveAddress])
 
   /* ── Stop current request ────────────────────────────────────────── */
   function stopRequest() {
@@ -1185,8 +1306,18 @@ export default function App() {
         body:    JSON.stringify({ text: trimmed, senderAddress: effectiveAddress }),
         signal:  controller.signal,
       })
-      const json = await res.json()
-      if (!json.ok) throw new Error(json.error ?? 'Unknown error')
+      const raw  = await res.text()
+      let json: any
+      try { json = raw ? JSON.parse(raw) : {} }
+      catch {
+        const snippet = raw.slice(0, 120) || '(empty body)'
+        throw new Error(
+          res.status === 429 ? 'Rate limit reached — try again in a minute.' :
+          res.status >= 500   ? `Server error (${res.status}). Try again.` :
+          `Bad response from server (${res.status}): ${snippet}`,
+        )
+      }
+      if (!json.ok) throw new Error(json.error ?? `Request failed (${res.status})`)
 
       const intentType = json.intent_type as string
 
@@ -1322,69 +1453,53 @@ export default function App() {
     ))
   }
 
+  /* ── Build BCS bytes from a serialized PTB JSON, using the zkLogin address as sender ── */
+  // Some endpoints (`/api/ptb`, `/api/batch-payment-ptb`, `/api/send-ptb`) return the
+  // PTB as JSON (via `ptb.serialize()`). We reconstruct, set sender = zkLogin address,
+  // and build the BCS bytes so they can be signed with the ephemeral key.
+  const buildBytesFromPtbJson = useCallback(async (ptbJson: string): Promise<string> => {
+    if (!effectiveAddress) throw new Error('Not signed in')
+    const tx = Transaction.from(ptbJson)
+    tx.setSender(effectiveAddress)
+    const client = new SuiJsonRpcClient({ url: getJsonRpcFullnodeUrl('mainnet'), network: 'mainnet' })
+    const bytes  = await tx.build({ client })
+    return toBase64(bytes)
+  }, [effectiveAddress])
+
   /* ── Sign NAVI transaction ────────────────────────────────────────── */
   async function handleNaviSign(msgId: string) {
     const msg = messages.find(m => m.id === msgId)
-    if (!msg?.payload || !account) return
+    if (!msg?.payload || !effectiveAddress) return
 
     const intentType = msg.intentType ?? 'lend'
     const token  = (msg.payload.parsedIntent?.input_asset ?? 'SUI').toUpperCase()
     const amount = msg.payload.parsedIntent?.input_amount ?? 0
 
     setMessages(prev => prev.map(m =>
-      m.id === msgId ? { ...m, actionLabel: '· AWAITING · WALLET' } : m
+      m.id === msgId ? { ...m, actionLabel: '· SIGNING · ZKLOGIN' } : m
     ))
 
     try {
-      let ptbB64 = msg.payload.ptbB64 as string | null
+      // Always rebuild the PTB with the zkLogin address as sender — any cached
+      // ptbB64 from /api/intent was built with the old sender claim and won't verify.
+      const res = await fetch('/api/navi-ptb', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ type: intentType, token, amount, sender: effectiveAddress }),
+      })
+      const json = await res.json()
+      if (!json.ok) throw new Error(json.error ?? 'Failed to build NAVI transaction')
+      const ptbB64 = json.ptbB64 as string
 
-      if (!ptbB64) {
-        // Build fresh PTB from server
-        const res = await fetch('/api/navi-ptb', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ type: intentType, token, amount, sender: account.address }),
-        })
-        const json = await res.json()
-        if (!json.ok) throw new Error(json.error ?? 'Failed to build NAVI transaction')
-        ptbB64 = json.ptbB64 as string
-      }
-
-      // Decode base64 → Uint8Array → Transaction
-      const bytes = Uint8Array.from(atob(ptbB64!).split('').map(c => c.charCodeAt(0)))
-      const tx    = Transaction.from(bytes)
-
-      signAndExecuteTransaction(
-        { transaction: tx },
-        {
-          onSuccess: (result) => {
-            setMessages(prev => prev.map(m =>
-              m.id === msgId ? {
-                ...m,
-                actionLabel:     `· EXECUTED · NAVI`,
-                executionDigest: result.digest,
-              } : m
-            ))
-            setTimeout(refreshPortfolio, 3000)
-          },
-          onError: (error) => {
-            setMessages(prev => prev.map(m =>
-              m.id === msgId ? {
-                ...m,
-                actionLabel: '· FAILED',
-                text: `Transaction failed: ${error.message ?? 'rejected by wallet'}`,
-              } : m
-            ))
-          },
-        }
-      )
-    } catch (err: any) {
+      const digest = await zkLogin.signAndExecuteBytes(ptbB64)
       setMessages(prev => prev.map(m =>
-        m.id === msgId ? {
-          ...m,
-          actionLabel: '· ERROR',
-          text: err.message ?? 'NAVI execution failed.',
-        } : m
+        m.id === msgId ? { ...m, actionLabel: '· EXECUTED · NAVI', executionDigest: digest } : m
+      ))
+      setTimeout(refreshPortfolio, 3000)
+    } catch (err: any) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      setMessages(prev => prev.map(m =>
+        m.id === msgId ? { ...m, actionLabel: '· FAILED', text: `Transaction failed: ${errMsg}` } : m
       ))
     }
   }
@@ -1392,7 +1507,7 @@ export default function App() {
   /* ── Batch / Split payment sign ──────────────────────────────────── */
   async function handleBatchSign(msgId: string) {
     const msg = messages.find(m => m.id === msgId)
-    if (!msg?.payload?.batchData || !account) return
+    if (!msg?.payload?.batchData || !effectiveAddress) return
 
     const bd = msg.payload.batchData
 
@@ -1405,7 +1520,7 @@ export default function App() {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
-          senderAddress:   account.address,
+          senderAddress:   effectiveAddress,
           members:         bd.members,
           amountPerPerson: bd.amountPerPerson,
           token:           bd.token,
@@ -1414,43 +1529,20 @@ export default function App() {
       const json = await res.json()
       if (!json.ok) throw new Error(json.error ?? 'Failed to build batch PTB')
 
-      const tx = Transaction.from(json.ptbJson)
-
       setMessages(prev => prev.map(m =>
-        m.id === msgId ? { ...m, actionLabel: '· AWAITING · WALLET' } : m
+        m.id === msgId ? { ...m, actionLabel: '· SIGNING · ZKLOGIN' } : m
       ))
 
-      signAndExecuteTransaction(
-        { transaction: tx },
-        {
-          onSuccess: (result) => {
-            setMessages(prev => prev.map(m =>
-              m.id === msgId ? {
-                ...m,
-                actionLabel:     '· EXECUTED · BATCH',
-                executionDigest: result.digest,
-              } : m
-            ))
-            setTimeout(refreshPortfolio, 3000)
-          },
-          onError: (error) => {
-            setMessages(prev => prev.map(m =>
-              m.id === msgId ? {
-                ...m,
-                actionLabel:    '· FAILED',
-                executionError: error.message ?? 'Transaction rejected.',
-              } : m
-            ))
-          },
-        }
-      )
-    } catch (err: any) {
+      const txBytesB64 = await buildBytesFromPtbJson(json.ptbJson)
+      const digest     = await zkLogin.signAndExecuteBytes(txBytesB64)
       setMessages(prev => prev.map(m =>
-        m.id === msgId ? {
-          ...m,
-          actionLabel: '· ERROR',
-          text:        err.message ?? 'Batch payment failed.',
-        } : m
+        m.id === msgId ? { ...m, actionLabel: '· EXECUTED · BATCH', executionDigest: digest } : m
+      ))
+      setTimeout(refreshPortfolio, 3000)
+    } catch (err: any) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      setMessages(prev => prev.map(m =>
+        m.id === msgId ? { ...m, actionLabel: '· FAILED', executionError: errMsg } : m
       ))
     }
   }
@@ -1459,7 +1551,7 @@ export default function App() {
   async function handleSendSign(msgId: string) {
     const msg = messages.find(m => m.id === msgId)
     const p   = msg?.payload?.ptbParams as { token?: string; amount?: number; recipient?: string } | undefined
-    if (!msg || !account || !p?.token || !p?.amount || !p?.recipient) return
+    if (!msg || !effectiveAddress || !p?.token || !p?.amount || !p?.recipient) return
 
     setMessages(prev => prev.map(m =>
       m.id === msgId ? { ...m, actionLabel: '· BUILDING · PTB' } : m
@@ -1470,7 +1562,7 @@ export default function App() {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
-          senderAddress: account.address,
+          senderAddress: effectiveAddress,
           recipient:     p.recipient,
           token:         p.token,
           amount:        p.amount,
@@ -1479,43 +1571,24 @@ export default function App() {
       const json = await res.json()
       if (!json.ok) throw new Error(json.error ?? 'Failed to build send PTB')
 
-      const tx = Transaction.from(json.ptbJson)
-
       setMessages(prev => prev.map(m =>
-        m.id === msgId ? { ...m, actionLabel: '· AWAITING · WALLET' } : m
+        m.id === msgId ? { ...m, actionLabel: '· SIGNING · ZKLOGIN' } : m
       ))
 
-      signAndExecuteTransaction(
-        { transaction: tx },
-        {
-          onSuccess: (result) => {
-            setMessages(prev => prev.map(m =>
-              m.id === msgId ? {
-                ...m,
-                actionLabel:     `· SENT · ${p.amount} ${p.token}`,
-                executionDigest: result.digest,
-              } : m
-            ))
-            setTimeout(refreshPortfolio, 3000)
-          },
-          onError: (error) => {
-            setMessages(prev => prev.map(m =>
-              m.id === msgId ? {
-                ...m,
-                actionLabel:    '· FAILED',
-                executionError: error.message ?? 'Transaction rejected.',
-              } : m
-            ))
-          },
-        }
-      )
-    } catch (err: any) {
+      const txBytesB64 = await buildBytesFromPtbJson(json.ptbJson)
+      const digest     = await zkLogin.signAndExecuteBytes(txBytesB64)
       setMessages(prev => prev.map(m =>
         m.id === msgId ? {
           ...m,
-          actionLabel:    '· ERROR',
-          executionError: err.message ?? 'Send failed.',
+          actionLabel:     `· SENT · ${p.amount} ${p.token}`,
+          executionDigest: digest,
         } : m
+      ))
+      setTimeout(refreshPortfolio, 3000)
+    } catch (err: any) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      setMessages(prev => prev.map(m =>
+        m.id === msgId ? { ...m, actionLabel: '· FAILED', executionError: errMsg } : m
       ))
     }
   }
@@ -1572,47 +1645,32 @@ export default function App() {
     ))
 
     try {
-      // Fetch a fresh serialized PTB from the server
+      // Always quote with the zkLogin address as sender so the PTB binds to it.
+      const params = { ...msg.guardData.quoteParams, sender: effectiveAddress ?? msg.guardData.quoteParams.sender }
+
       const ptbRes  = await fetch('/api/ptb', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(msg.guardData.quoteParams),
+        body:    JSON.stringify(params),
       })
       const ptbJson = await ptbRes.json()
       if (!ptbJson.ok) throw new Error(ptbJson.error ?? 'Failed to build transaction')
 
-      const tx = Transaction.from(ptbJson.ptbJson)
-
       setMessages(prev => prev.map(m =>
-        m.id === msgId ? { ...m, actionLabel: '· AWAITING · WALLET' } : m,
+        m.id === msgId ? { ...m, actionLabel: '· SIGNING · ZKLOGIN' } : m,
       ))
 
-      signAndExecuteTransaction(
-        { transaction: tx },
-        {
-          onSuccess: (result) => {
-            setMessages(prev => prev.map(m =>
-              m.id === msgId ? {
-                ...m,
-                loading:          false,
-                actionLabel:      '· EXECUTED · MAINNET',
-                executionDigest:  result.digest,
-              } : m,
-            ))
-            setTimeout(refreshPortfolio, 3000)
-          },
-          onError: (error) => {
-            setMessages(prev => prev.map(m =>
-              m.id === msgId ? {
-                ...m,
-                loading:        false,
-                actionLabel:    '· FAILED · MAINNET',
-                executionError: error.message ?? 'Transaction rejected or failed.',
-              } : m,
-            ))
-          },
-        },
-      )
+      const txBytesB64 = await buildBytesFromPtbJson(ptbJson.ptbJson)
+      const digest     = await zkLogin.signAndExecuteBytes(txBytesB64)
+      setMessages(prev => prev.map(m =>
+        m.id === msgId ? {
+          ...m,
+          loading:         false,
+          actionLabel:     '· EXECUTED · MAINNET',
+          executionDigest: digest,
+        } : m,
+      ))
+      setTimeout(refreshPortfolio, 3000)
     } catch (err: any) {
       setMessages(prev => prev.map(m =>
         m.id === msgId ? {
@@ -1630,7 +1688,7 @@ export default function App() {
     ? `${account.address.slice(0, 6)}…${account.address.slice(-4)}`
     : null
 
-  // ── Welcome / onboarding page ──────────────────────────────────────────────
+  // ── Welcome / onboarding page (invite link) ───────────────────────────────
   if (showWelcome) {
     return (
       <WelcomePage
@@ -1640,8 +1698,11 @@ export default function App() {
           setConnectOpen(open)
           if (!open && account) setShowWelcome(false)
         }}
-        onZkLogin={async () => { await zkLogin.login(); setShowWelcome(false) }}
-        zkAvailable={zkLogin.available}
+        onZkLogin={async () => { await zkLogin.signIn(); setShowWelcome(false) }}
+        zkAvailable={true}
+        // After Google sign-in, this address is the user's new zkLogin Sui wallet —
+        // WelcomePage's auto-claim effect will POST /api/onboard/:token/claim with it.
+        signedInAddress={zkLogin.user?.address ?? null}
         onEnterApp={() => {
           // Clean the invite token from the URL and proceed
           window.history.replaceState({}, '', window.location.pathname)
@@ -1651,19 +1712,26 @@ export default function App() {
     )
   }
 
+  // ── Auth gate: only zkLogin signs you into the app ───────────────────────
+  // (Slush/wallet-connect is no longer a path in. Wait for /me probe so we
+  //  don't flash the landing for a user who's already signed in via Google.)
+  if (!zkLogin.user && !zkLogin.loading) {
+    return <LandingPage />
+  }
+
   return (
-    <div className="h-screen flex flex-col bg-[#0a0a0f] overflow-hidden">
+    <div className="h-screen flex flex-col bg-[#0a0a0f] overflow-hidden overflow-x-hidden">
 
       {/* ── Header ─────────────────────────────────────────────────── */}
-      <header className="shrink-0 px-6 py-4 border-b border-white/5 flex items-center justify-between bg-[#0a0a0f]/90 backdrop-blur-md z-20">
-        <div className="flex items-center gap-4">
-          <VektorLogo className="h-7 w-auto text-white" />
-          <div className="flex items-center gap-1.5">
+      <header className="shrink-0 px-3 md:px-6 py-3 md:py-4 border-b border-white/5 flex items-center justify-between gap-2 bg-[#0a0a0f]/90 backdrop-blur-md z-20">
+        <div className="flex items-center gap-2 md:gap-4 min-w-0">
+          <VektorLogo className="h-6 md:h-7 w-auto text-white shrink-0" />
+          <div className="hidden md:flex items-center gap-1.5 shrink-0">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-xs text-slate-500 font-mono">mainnet</span>
           </div>
-          {/* Nav links */}
-          <nav className="flex items-center gap-1 ml-2">
+          {/* Nav links — hidden on mobile (Echo reachable via sidebar drawer) */}
+          <nav className="hidden md:flex items-center gap-1 md:ml-2 shrink-0">
             {(['chat', 'echo'] as const).map(page => (
               <button
                 key={page}
@@ -1684,11 +1752,22 @@ export default function App() {
         </div>
 
         {account ? (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 md:gap-2">
+            {/* Mobile hamburger — opens sidebar drawer (md:hidden) */}
+            <button
+              onClick={() => setMobileSidebarOpen(true)}
+              className="md:hidden w-9 h-9 flex items-center justify-center rounded-lg border border-white/8 bg-[#111118] text-slate-400 hover:border-purple-500/30 hover:text-purple-300 transition-colors shrink-0"
+              title="Portfolio"
+              aria-label="Open sidebar"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
             {/* Contacts button */}
             <button
               onClick={() => setContactsOpen(true)}
-              className="w-8 h-8 flex items-center justify-center rounded-lg border border-white/8 bg-[#111118] text-slate-500 hover:border-purple-500/30 hover:text-purple-300 transition-colors"
+              className="w-9 h-9 md:w-8 md:h-8 flex items-center justify-center rounded-lg border border-white/8 bg-[#111118] text-slate-500 hover:border-purple-500/30 hover:text-purple-300 transition-colors shrink-0"
               title="Contacts &amp; Groups"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
@@ -1696,20 +1775,21 @@ export default function App() {
               </svg>
             </button>
 
-          <div ref={walletRef} className="relative">
+          <div ref={walletRef} className="relative shrink-0">
             <button
               onClick={() => setWalletOpen(o => !o)}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 bg-[#111118] text-sm text-slate-300 hover:border-purple-500/40 hover:text-white transition-colors font-mono"
+              className="flex items-center gap-1.5 md:gap-2 px-2.5 md:px-3 h-9 md:h-auto md:py-2 rounded-lg border border-white/10 bg-[#111118] text-xs md:text-sm text-slate-300 hover:border-purple-500/40 hover:text-white transition-colors font-mono"
             >
+              {/* $ value: desktop only — mobile keeps the pill compact */}
               {portfolio != null && (portfolio.balances?.length > 0 || portfolio.totalUsd > 0) ? (
                 <>
-                  <span className="text-slate-300">${portfolio.totalUsd.toFixed(2)}</span>
-                  <span className="text-white/20 select-none">·</span>
+                  <span className="hidden md:inline text-slate-300">${portfolio.totalUsd.toFixed(2)}</span>
+                  <span className="hidden md:inline text-white/20 select-none">·</span>
                 </>
               ) : (
                 <>
-                  <span className="w-12 h-3 rounded bg-white/10 animate-pulse inline-block" />
-                  <span className="text-white/20 select-none">·</span>
+                  <span className="hidden md:inline w-12 h-3 rounded bg-white/10 animate-pulse" />
+                  <span className="hidden md:inline text-white/20 select-none">·</span>
                 </>
               )}
               <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
@@ -1735,20 +1815,32 @@ export default function App() {
             )}
           </div>
           </div>
-        ) : zkLogin.session ? (
-          /* ── zkLogin session active ─── */
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-white/10 bg-[#111118] text-sm text-slate-300 font-mono">
-              <span className="w-2 h-2 rounded-full bg-blue-400 shrink-0" title="Signed in with Google" />
-              <span>{zkLogin.session.address.slice(0, 6)}…{zkLogin.session.address.slice(-4)}</span>
-              <span className="text-xs text-slate-600">Google</span>
-            </div>
+        ) : zkLogin.user ? (
+          /* ── zkLogin session active — full chat header (hamburger + contacts + Google pill + sign-out) ─── */
+          <div className="flex items-center gap-1.5 md:gap-2">
+            {/* Mobile hamburger — opens sidebar drawer (md:hidden) */}
             <button
-              onClick={zkLogin.logout}
-              className="px-3 py-2 rounded-lg border border-white/10 bg-[#111118] text-xs text-red-400 hover:bg-red-500/10 transition-colors"
+              onClick={() => setMobileSidebarOpen(true)}
+              className="md:hidden w-9 h-9 flex items-center justify-center rounded-lg border border-white/8 bg-[#111118] text-slate-400 hover:border-purple-500/30 hover:text-purple-300 transition-colors shrink-0"
+              title="Portfolio"
+              aria-label="Open sidebar"
             >
-              Sign out
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
             </button>
+            {/* Contacts */}
+            <button
+              onClick={() => setContactsOpen(true)}
+              className="w-9 h-9 md:w-8 md:h-8 flex items-center justify-center rounded-lg border border-white/8 bg-[#111118] text-slate-500 hover:border-purple-500/30 hover:text-purple-300 transition-colors shrink-0"
+              title="Contacts &amp; Groups"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
+              </svg>
+            </button>
+            {/* Google avatar — opens dropdown with address + copy + sign out */}
+            <ZkAvatarMenu zkLogin={zkLogin} addrCopied={addrCopied} setAddrCopied={setAddrCopied} />
           </div>
         ) : (
           /* ── Not connected ─── */
@@ -1762,9 +1854,9 @@ export default function App() {
               open={connectOpen}
               onOpenChange={setConnectOpen}
             />
-            {zkLogin.available && (
+            {true && (
               <button
-                onClick={zkLogin.login}
+                onClick={zkLogin.signIn}
                 disabled={zkLogin.loading}
                 className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-white/10 bg-white text-[#1a1a1a] text-xs font-semibold hover:bg-white/90 disabled:opacity-50 transition-colors"
                 title="Sign in with Google (zkLogin)"
@@ -1833,7 +1925,7 @@ export default function App() {
                       }}
                       className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold transition-colors"
                     >
-                      {account ? `Pay ${incomingPayment.amount} ${incomingPayment.token}` : 'Connect Wallet to Pay'}
+                      {effectiveAddress ? `Pay ${incomingPayment.amount} ${incomingPayment.token}` : 'Sign in to Pay'}
                     </button>
                     <span className={`text-xs font-mono ${incomingPayment.status === 'paid' ? 'text-emerald-400' : 'text-yellow-400'}`}>
                       {incomingPayment.status === 'paid' ? '✓ Already paid' : '⏳ Pending'}
@@ -1846,13 +1938,15 @@ export default function App() {
                 <div className="flex flex-col items-center justify-center py-24 gap-5 text-center select-none">
                   <VektorSymbol className="w-16 h-16 text-white opacity-90" />
                   <div className="space-y-2">
-                    <p className="text-white font-semibold tracking-tight">Vektor — Financial OS for Sui</p>
+                    <p className="text-white font-semibold tracking-tight">
+                      {zkLogin.user?.givenName
+                        ? `Hey ${zkLogin.user.givenName} — what's the move?`
+                        : 'Vektor — Financial OS for Sui'}
+                    </p>
                     <p className="text-sm text-slate-500 max-w-sm mx-auto leading-relaxed">
                       {effectiveAddress
                         ? 'Swap, lend, borrow, DCA, set conditions, analyze your wallet — all in plain English.'
-                        : zkLogin.available
-                          ? 'Connect a wallet or sign in with Google to start talking to Vektor.'
-                          : 'Connect your wallet to start talking to Vektor.'}
+                        : 'Connect a wallet or sign in with Google to start talking to Vektor.'}
                     </p>
                   </div>
                   {!effectiveAddress && (
@@ -1866,9 +1960,9 @@ export default function App() {
                         open={connectOpen}
                         onOpenChange={setConnectOpen}
                       />
-                      {zkLogin.available && (
+                      {true && (
                         <button
-                          onClick={zkLogin.login}
+                          onClick={zkLogin.signIn}
                           disabled={zkLogin.loading}
                           className="flex items-center gap-2 px-5 py-2.5 rounded-xl border border-white/10 bg-white text-[#1a1a1a] text-sm font-semibold hover:bg-white/90 disabled:opacity-50 transition-colors"
                         >
@@ -1881,9 +1975,7 @@ export default function App() {
                           {zkLogin.loading ? 'Redirecting to Google…' : 'Sign in with Google'}
                         </button>
                       )}
-                      {zkLogin.error && (
-                        <p className="text-xs text-red-400 max-w-xs text-center">{zkLogin.error}</p>
-                      )}
+                      {/* errors from the OAuth round-trip surface via ?error= URL param */}
                     </div>
                   )}
                 </div>
@@ -1914,7 +2006,7 @@ export default function App() {
                   <button
                     key={action}
                     onClick={() => sendMessage(action)}
-                    disabled={!account}
+                    disabled={!effectiveAddress}
                     className="text-xs px-3 py-1.5 rounded-full border border-white/8 text-slate-500 hover:border-purple-500/40 hover:text-purple-300 transition-colors disabled:opacity-20 disabled:cursor-not-allowed"
                   >
                     {action}
@@ -1924,7 +2016,7 @@ export default function App() {
 
               <div className="relative">
                 {/* Slash commands popup */}
-                {showSlashMenu && account && (
+                {showSlashMenu && effectiveAddress && (
                   <SlashMenu
                     filter={input}
                     onSelect={(starter) => {
@@ -1940,12 +2032,12 @@ export default function App() {
                   />
                 )}
 
-                {!account && (
+                {!effectiveAddress && (
                   <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-[#0a0a0f]/60 backdrop-blur-sm z-10 pointer-events-none">
-                    <span className="text-sm text-slate-500">Connect wallet to start</span>
+                    <span className="text-sm text-slate-500">Sign in to start</span>
                   </div>
                 )}
-                <div className="flex items-end gap-3 bg-[#111118] border border-white/8 rounded-2xl px-4 py-3 focus-within:border-purple-500/25 transition-colors">
+                <div className="flex items-end gap-3 bg-[#111118] border border-white/8 rounded-2xl px-4 py-3 focus-within:border-purple-500/25 transition-colors min-h-[52px]">
                   <textarea
                     ref={textareaRef}
                     value={input}
@@ -1965,17 +2057,18 @@ export default function App() {
                         sendMessage(input)
                       }
                     }}
-                    disabled={!account || isLoading}
+                    disabled={!effectiveAddress || isLoading}
                     placeholder={isLoading ? 'Processing…' : PLACEHOLDER}
                     rows={1}
-                    className="flex-1 bg-transparent resize-none text-sm text-white placeholder:text-slate-600 focus:outline-none leading-relaxed disabled:opacity-50"
+                    // text-base (16px) on mobile prevents iOS zoom-on-focus; revert to text-sm at md+
+                    className="flex-1 bg-transparent resize-none text-base md:text-sm text-white placeholder:text-slate-600 focus:outline-none leading-relaxed disabled:opacity-50"
                     style={{ maxHeight: '120px' }}
                   />
                   {isLoading ? (
                     /* ── Stop button ── */
                     <button
                       onClick={stopRequest}
-                      className="shrink-0 w-8 h-8 rounded-lg bg-red-600/20 border border-red-500/30 hover:bg-red-600/40 hover:border-red-500/60 transition-all flex items-center justify-center"
+                      className="shrink-0 w-11 h-11 md:w-8 md:h-8 rounded-lg bg-red-600/20 border border-red-500/30 hover:bg-red-600/40 hover:border-red-500/60 transition-all flex items-center justify-center"
                       title="Stop"
                     >
                       <svg className="w-3 h-3 text-red-400" viewBox="0 0 24 24" fill="currentColor">
@@ -1986,8 +2079,8 @@ export default function App() {
                     /* ── Mic + Send buttons ── */
                     <div className="flex items-center gap-1.5">
                       <MicButton
-                        disabled={!account || isLoading}
-                        wallet={account?.address}
+                        disabled={!effectiveAddress || isLoading}
+                        wallet={effectiveAddress ?? undefined}
                         onLiveText={(text: string) => {
                           // Only overwrite if the user hasn't manually edited the field
                           setInput(prev => {
@@ -2007,8 +2100,8 @@ export default function App() {
                       />
                       <button
                         onClick={() => sendMessage(input)}
-                        disabled={!account || !input.trim()}
-                        className="shrink-0 w-8 h-8 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:opacity-20 disabled:cursor-not-allowed transition-all flex items-center justify-center group"
+                        disabled={!effectiveAddress || !input.trim()}
+                        className="shrink-0 w-11 h-11 md:w-8 md:h-8 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:opacity-20 disabled:cursor-not-allowed transition-all flex items-center justify-center group"
                       >
                         <svg className="w-4 h-4 text-white transition-transform group-hover:translate-x-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
@@ -2028,16 +2121,21 @@ export default function App() {
 
         {/* ── Sidebar ───────────────────────────────────────────────── */}
         <Sidebar
-          wallet={account?.address ?? null}
+          wallet={effectiveAddress}
           portfolio={portfolio}
           onRefresh={refreshPortfolio}
+          mobileOpen={mobileSidebarOpen}
+          onMobileClose={() => setMobileSidebarOpen(false)}
+          currentPage={currentPage}
+          onPageChange={setCurrentPage}
+          echoAlertCount={echoAlerts.length}
         />
       </div>
 
       {/* ── Contacts overlay ────────────────────────────────────────── */}
-      {contactsOpen && account && (
+      {contactsOpen && effectiveAddress && (
         <ContactsPage
-          wallet={account.address}
+          wallet={effectiveAddress}
           onClose={() => setContactsOpen(false)}
         />
       )}

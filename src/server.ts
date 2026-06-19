@@ -27,9 +27,11 @@ import {
   createGroup, addGroupMember, listGroups, lookupGroup, resolveGroupMembers,
   incrementPaymentCount,
 } from './contacts/index.js'
+import { isSuiName, resolveSuiName, reverseSuiName } from './suins/resolver.js'
 import { walrusHealthCheck } from './walrus/client.js'
 
 import { parseIntent }          from './parser/intent.js'
+import { validateIntent }       from './parser/validate.js'
 import { runGuardian }          from './guardian/v2.js'
 import { rewritePTB }           from './guardian/rewriter.js'
 import { fetchPortfolio, fetchRecentTxs, fetchTransaction, getTokenBalance } from './portfolio/fetcher.js'
@@ -46,7 +48,7 @@ import {
 import {
   getMemory, saveMemory, buildMemoryContext,
   getUnseenAlerts, markAlertsSeen, updatePortfolioSnapshot,
-  addAlert, incrementIntentCount, logIntent,
+  addAlert, incrementIntentCount, logIntent, updateIntentStatus,
   getPreferredLanguage, setPreferredLanguage,
 } from './memory/index.js'
 import { startScheduler }        from './scheduler/worker.js'
@@ -59,6 +61,7 @@ import { generateSessionKeypair, storeSessionKey, buildSessionAuthPtb, DEFAULT_L
 import type { EchoRule } from './echo/types.js'
 import { requireWalletSig, requireWalletSigOrWorkerSecret } from './middleware/requireWalletSig.js'
 import { getConditionById } from './db/store.js'
+import { registerZkLoginRoutes } from './auth/zklogin-routes.js'
 
 /* ─── VektorRegistry — local JSON counter ────────────────────────────────── */
 
@@ -216,9 +219,17 @@ const intentLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders:   false,
   message:  { ok: false, error: 'rate limit exceeded' },
+  // Bypass rate limiter for local smoke tests when SMOKE_TEST_KEY matches.
+  skip: (req) => {
+    const k = process.env.SMOKE_TEST_KEY
+    return !!k && req.headers['x-smoke-key'] === k
+  },
 })
 app.use('/api/intent',     intentLimiter)
 app.use('/api/transcribe', intentLimiter)
+
+/* ─── zkLogin (Google → Shinami → Sui) ──────────────────────────────────── */
+registerZkLoginRoutes(app)
 
 /* ─────────────────────────────────────────────────────────────────────────
    POST /api/intent  — unified intent handler
@@ -227,10 +238,29 @@ app.use('/api/transcribe', intentLimiter)
 ───────────────────────────────────────────────────────────────────────── */
 
 app.post('/api/intent', async (req, res) => {
+  // Track the intent record id so we can flip pending→success/failed on any exit
+  let intentRecordId: string | null = null
+  let intentSender:   string | null = null
+  const markFailed = () => {
+    if (intentSender && intentRecordId) {
+      try { updateIntentStatus(intentSender, intentRecordId, 'failed') } catch {}
+    }
+  }
+  // Auto-update the history record's status from the response's ok field.
+  // For write intents that still need client signing, the UI will report final status separately;
+  // for read-only intents this correctly flips pending→success the moment the response goes out.
+  const originalJson = res.json.bind(res)
+  res.json = ((body: any) => {
+    if (intentSender && intentRecordId && body && typeof body === 'object') {
+      try { updateIntentStatus(intentSender, intentRecordId, body.ok === false ? 'failed' : 'success') } catch {}
+    }
+    return originalJson(body)
+  }) as typeof res.json
   try {
     const { text, senderAddress } = req.body as { text: string; senderAddress?: string }
     const sender = senderAddress || SIM_ADDR
     if (!text?.trim()) { res.status(400).json({ ok: false, error: 'text is required' }); return }
+    intentSender = sender
 
     // ── Fast-path: /onboard command — skip LLM parsing ──────────────────────
     if (/^\/?onboard\b/i.test(text.trim())) {
@@ -280,6 +310,18 @@ app.post('/api/intent', async (req, res) => {
     const memCtx  = sender !== SIM_ADDR ? buildMemoryContext(sender) : undefined
     const parsed  = await parseIntent(text, memCtx)
 
+    // ── Post-parse validation gate ─────────────────────────────────────
+    // Catches missing amounts, same-token swaps, missing recipients/triggers
+    // BEFORE we quote / build / sign anything. Pure function — see
+    // src/parser/validate.ts and tests/intents.correctness.ts.
+    {
+      const v = validateIntent(parsed)
+      if (!v.ok) {
+        res.json({ ok: false, error: v.clarify, language: (parsed as any).language ?? 'en' })
+        return
+      }
+    }
+
     // Guard: if the parser returned 'send' or 'contact_payment' but the target
     // (recipient / recipient_name) is a known token symbol, the LLM confused
     // "swap X to TOKEN" or "swap X for TOKEN" with a transfer. Reclassify as swap.
@@ -296,10 +338,19 @@ app.post('/api/intent', async (req, res) => {
         ''
       ).toUpperCase()
       if (KNOWN_TOKEN_SYMBOLS.has(target)) {
-        parsed.output_goal        = target
-        parsed.recipient          = null
-        ;(parsed as any).recipient_name = null
-        parsed.intent_type        = 'swap'
+        // Same-token guard — don't silently turn "send N USDC to USDC" into a wasteful USDC→USDC swap.
+        const source = (parsed.input_asset ?? '').toUpperCase()
+        if (source && source === target) {
+          // Leave intent_type as 'send' with no recipient so the send handler rejects cleanly below.
+          // (Handled by the unified send-resolution path: no 0x, not a SuiNS name, not a contact → asks for a recipient.)
+          parsed.recipient                 = null
+          ;(parsed as any).recipient_name = null
+        } else {
+          parsed.output_goal        = target
+          parsed.recipient          = null
+          ;(parsed as any).recipient_name = null
+          parsed.intent_type        = 'swap'
+        }
       }
     }
 
@@ -317,7 +368,7 @@ app.post('/api/intent', async (req, res) => {
     if (sender !== SIM_ADDR) {
       registerWallet(sender)
       incrementIntentCount(sender)
-      if (intent) logIntent(sender, { type: intent, summary: text.slice(0, 120), status: 'success' })
+      if (intent) intentRecordId = logIntent(sender, { type: intent, summary: text.slice(0, 120), status: 'pending' })
       // Persist language preference — always overwrite so stale non-English prefs get cleared
       setPreferredLanguage(sender, lang)
       // Bump registry on swap/memecoin types
@@ -508,20 +559,47 @@ app.post('/api/intent', async (req, res) => {
     /* ── Send (direct transfer) ───────────────────────────────────── */
 
     if (intent === 'send') {
-      const token     = (parsed.input_asset ?? 'SUI').toUpperCase()
-      const amount    = parsed.input_amount ?? 0
-      const recipient = parsed.recipient ?? ''
-      const sendMsgEn = `Ready to send ${amount} ${token} to ${recipient.slice(0, 8)}…${recipient.slice(-4)}. Confirm to proceed.`
+      const token        = (parsed.input_asset ?? 'SUI').toUpperCase()
+      const amount       = parsed.input_amount ?? 0
+      const rawRecipient = parsed.recipient ?? ''
+
+      // Resolution order: raw 0x → SuiNS name → existing contact lookup
+      let recipient   = rawRecipient
+      let displayName = ''
+      if (!/^0x[0-9a-fA-F]{1,64}$/.test(rawRecipient)) {
+        if (isSuiName(rawRecipient)) {
+          const resolved = await resolveSuiName(rawRecipient)
+          if (!resolved) {
+            markFailed()
+            res.json({ ok: false, error: `Couldn't resolve ${rawRecipient} — that SuiNS name isn't registered.`, language: lang })
+            return
+          }
+          recipient   = resolved
+          displayName = rawRecipient.startsWith('@') ? rawRecipient.slice(1) + '.sui' : rawRecipient.toLowerCase()
+        } else if (rawRecipient && sender !== SIM_ADDR) {
+          const contactAddr = await lookupContact(sender, rawRecipient).catch(() => null)
+          if (contactAddr) { recipient = contactAddr; displayName = rawRecipient }
+        }
+      } else {
+        // Raw 0x — try reverse SuiNS lookup so the confirmation shows "name.sui (0x..)"
+        const rev = await reverseSuiName(rawRecipient).catch(() => null)
+        if (rev) displayName = rev
+      }
+
+      const target    = displayName
+        ? `${displayName} (${recipient.slice(0, 8)}…${recipient.slice(-4)})`
+        : `${recipient.slice(0, 8)}…${recipient.slice(-4)}`
+      const sendMsgEn = `Ready to send ${amount} ${token} to ${target}. Confirm to proceed.`
       const sendMsg   = lang === 'en' ? sendMsgEn : await complete({
         system: 'You are Vektor. Translate this transfer confirmation exactly, keeping the address fragment unchanged.', prompt: sendMsgEn, maxTokens: 100, lang,
       }).catch(() => sendMsgEn)
       res.json({
-        ok: true, intent_type: intent, parsedIntent: parsed,
+        ok: true, intent_type: intent, parsedIntent: { ...parsed, recipient },
         language: lang,
         message:     sendMsg,
-        actionLabel: `· SEND · ${amount} ${token}`,
+        actionLabel: `· SEND · ${amount} ${token}${displayName ? ` · ${displayName}` : ''}`,
         ptbType:     'send',
-        ptbParams:   { token, amount, recipient },
+        ptbParams:   { token, amount, recipient, displayName: displayName || undefined },
       })
       return
     }
@@ -534,13 +612,25 @@ app.post('/api/intent', async (req, res) => {
       const recipientName = (parsed as any).recipient_name as string | null ?? parsed.recipient ?? ''
 
       if (!recipientName) {
+        markFailed()
         res.json({ ok: false, error: 'Who would you like to pay? Include their name.', language: lang })
         return
       }
 
-      const resolvedAddress = sender !== SIM_ADDR
-        ? await lookupContact(sender, recipientName).catch(() => null)
-        : null
+      // Resolution order: raw 0x → SuiNS name → existing contact lookup
+      let resolvedAddress: string | null = null
+      if (/^0x[0-9a-fA-F]{1,64}$/.test(recipientName)) {
+        resolvedAddress = recipientName
+      } else if (isSuiName(recipientName)) {
+        resolvedAddress = await resolveSuiName(recipientName)
+        if (!resolvedAddress) {
+          markFailed()
+          res.json({ ok: false, error: `Couldn't resolve ${recipientName} — that SuiNS name isn't registered.`, language: lang })
+          return
+        }
+      } else if (sender !== SIM_ADDR) {
+        resolvedAddress = await lookupContact(sender, recipientName).catch(() => null)
+      }
 
       if (!resolvedAddress) {
         const askEn = `I don't have an address saved for "${recipientName}". What's their wallet address?`
@@ -651,13 +741,18 @@ app.post('/api/intent', async (req, res) => {
         const groupName = steps[1] ?? ''
         if (!groupName) { res.json({ ok: false, error: 'Group name required. Usage: /group create "Staff" with Alice, Bob', language: lang }); return }
 
-        // Resolve member names from contacts for this user
+        // Resolve member names: 0x → as-is → SuiNS (resolved sync below) → contact lookup
         const memberNames = steps.slice(2)
         const contactList = sender !== SIM_ADDR ? await listContacts(sender).catch(() => []) : []
-        const members = memberNames.map(name => {
+        const members = await Promise.all(memberNames.map(async name => {
+          if (/^0x[0-9a-fA-F]{1,64}$/.test(name)) return { name, address: name }
+          if (isSuiName(name)) {
+            const addr = await resolveSuiName(name)
+            return { name, address: addr ?? '' }
+          }
           const c = contactList.find(ct => ct.name.toLowerCase() === name.toLowerCase())
           return { name, address: c?.address ?? '' }
-        }).filter(m => m.address !== '')
+        })).then(arr => arr.filter(m => m.address !== ''))
 
         const group = sender !== SIM_ADDR
           ? await createGroup(sender, groupName, members).catch(e => { throw e })
@@ -997,6 +1092,17 @@ app.post('/api/intent', async (req, res) => {
     const fromToken = (parsed.input_asset ?? 'SUI').toUpperCase()
     const toToken   = (parsed.output_goal ?? 'USDC').toUpperCase()
 
+    // Same-token guard — a token-to-itself swap is a no-op that wastes gas + slippage.
+    if (parsed.input_asset && parsed.output_goal && fromToken === toToken) {
+      const errEn  = `Can't swap ${fromToken} for itself — did you mean to send it to someone?`
+      const errMsg = lang === 'en' ? errEn : await complete({
+        system: 'You are Vektor. Translate this error message exactly, keeping the token symbol unchanged.',
+        prompt: errEn, maxTokens: 80, lang,
+      }).catch(() => errEn)
+      res.json({ ok: false, error: errMsg, language: lang })
+      return
+    }
+
     if (!parsed.input_asset || !parsed.output_goal || !parsed.input_amount) {
       // Conversational fallback — respond naturally in user's language
       const mem = sender !== SIM_ADDR ? buildMemoryContext(sender) : ''
@@ -1089,6 +1195,7 @@ app.post('/api/intent', async (req, res) => {
       })(),
     })
   } catch (err) {
+    markFailed()
     const msg = err instanceof Error ? err.message : String(err)
     res.status(500).json({ ok: false, error: msg })
   }
@@ -1711,17 +1818,28 @@ app.post('/api/batch-payment-ptb', async (req, res) => {
 
 app.post('/api/send-ptb', async (req, res) => {
   try {
-    const { senderAddress, recipient, token, amount } = req.body as {
+    const { senderAddress, recipient: rawRecipient, token, amount } = req.body as {
       senderAddress: string
       recipient:     string
       token:         string
       amount:        number
     }
-    if (!senderAddress || !recipient || !token || !amount || amount <= 0) {
+    if (!senderAddress || !rawRecipient || !token || !amount || amount <= 0) {
       res.status(400).json({ ok: false, error: 'senderAddress, recipient, token, amount required' }); return
     }
-    if (!/^0x[0-9a-fA-F]{1,64}$/.test(recipient)) {
-      res.status(400).json({ ok: false, error: 'recipient must be a hex Sui address' }); return
+
+    // Resolution order: raw 0x → SuiNS name → reject
+    let recipient = rawRecipient
+    if (!/^0x[0-9a-fA-F]{1,64}$/.test(rawRecipient)) {
+      if (isSuiName(rawRecipient)) {
+        const resolved = await resolveSuiName(rawRecipient)
+        if (!resolved) {
+          res.status(400).json({ ok: false, error: `Couldn't resolve ${rawRecipient} — that SuiNS name isn't registered.` }); return
+        }
+        recipient = resolved
+      } else {
+        res.status(400).json({ ok: false, error: 'recipient must be a hex Sui address or a SuiNS name (e.g. ivan.sui)' }); return
+      }
     }
 
     const { Transaction, coinWithBalance } = await import('@mysten/sui/transactions')

@@ -120,15 +120,30 @@ export function incrementIntentCount(wallet: string, swapAmountUsd = 0): void {
 export function logIntent(
   wallet: string,
   record: Omit<IntentRecord, 'id' | 'timestamp'>,
-): void {
+): string {
   const mem = getMemory(wallet)
+  const id  = randomUUID()
   mem.intentHistory.unshift({
     ...record,
-    id:        randomUUID(),
+    id,
     timestamp: new Date().toISOString(),
   })
   // Keep last 50 intents
   mem.intentHistory = mem.intentHistory.slice(0, 50)
+  saveMemory(mem)
+  return id
+}
+
+/** Update the status of a previously logged intent (success/failed). No-op if not found. */
+export function updateIntentStatus(
+  wallet: string,
+  id: string,
+  status: IntentRecord['status'],
+): void {
+  const mem = getMemory(wallet)
+  const rec = mem.intentHistory.find(r => r.id === id)
+  if (!rec) return
+  rec.status = status
   saveMemory(mem)
 }
 

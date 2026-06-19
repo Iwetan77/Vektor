@@ -58,6 +58,12 @@ CRITICAL classification rules:
       "send 5 SUI to USDC"       → swap  (USDC is a token — reclassify as swap)
       "send 5 SUI to 0xabc…"    → send  (0x address = valid recipient)
       "send 5 SUI to Alice"      → contact_payment  (name = contact)
+      "send 5 USDC to adeniyi.sui" → send  (SuiNS name = valid recipient; put "adeniyi.sui" in recipient)
+      "pay ivan.sui 10 SUI"      → send  (SuiNS name = recipient)
+      "send to @bob 2 SUI"       → send  (recipient: "@bob"; "@name" is the SuiNS shorthand for name.sui)
+  SuiNS names — anything matching <label>.sui (e.g. "ivan.sui", "000.sui", "adeniyi.sui") or
+    the "@<label>" shorthand is a RECIPIENT, never a token symbol. Put the literal name (e.g.
+    "adeniyi.sui" or "@bob") in the recipient field — the server resolves it to a 0x address.
   explain_transaction: ONLY use when the user provides an actual transaction hash (a long
     alphanumeric string like "D8zRVkhzNihmgLKSEeESh2TP7d4iRHa5HXgBgn1Eb93C") or a
     suiscan/suivision URL. "What did I do last?" has NO digest → use transaction_history instead.

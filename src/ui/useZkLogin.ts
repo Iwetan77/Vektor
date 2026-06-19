@@ -1,201 +1,151 @@
 /**
- * useZkLogin — full zkLogin lifecycle hook.
+ * useZkLogin — browser half of the zkLogin flow.
  *
- * Flow:
- *  1. User clicks "Sign in with Google"
- *  2. `login()` generates an OAuth URL, saves ephemeral state to sessionStorage,
- *     then redirects to Google.
- *  3. Google redirects back to the app with an id_token in the URL hash.
- *  4. On mount, this hook detects the hash, restores ephemeral state,
- *     fetches a ZK proof from the Mysten prover, and stores the session.
- *  5. `session.address` is the user's deterministic Sui address — pass it
- *     as `senderAddress` to /api/intent just like a regular wallet address.
+ *   • Server (Express) owns: JWT, salt, address (in an httpOnly session cookie),
+ *     and the Shinami proof minting.
+ *   • Browser owns: the EPHEMERAL Ed25519 key — kept in sessionStorage and never
+ *     sent to the server. That's the key that signs txBytes; we hand the server
+ *     only the resulting signature.
+ *
+ * Ported from sucker-punch's Next.js hook to Vite/React 18 (no "use client",
+ * fetches go through vite proxy to :3001).
  */
 
-import { useState, useEffect, useCallback } from 'react'
-import { Ed25519Keypair }  from '@mysten/sui/keypairs/ed25519'
-import { ZkLoginAuth }     from '../auth/zklogin.js'
-import type { ZkLoginSession, ZkProof } from '../types.js'
+import { useCallback, useEffect, useState } from 'react'
+import { fromBase64 } from '@mysten/sui/utils'
+import {
+  createEphemeralSession,
+  signTxBytes,
+  type EphemeralSession,
+} from '../auth/zklogin-core/zklogin.js'
 
-// ─── Config ───────────────────────────────────────────────────────────────────
+const EPH_KEY = 'vektor.zk.ephemeral'
 
-const CLIENT_ID    = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID as string | undefined
-const NETWORK      = 'mainnet' as const
-const REDIRECT_URI = typeof window !== 'undefined' ? window.location.origin : ''
-const SALT_SERVICE = 'https://salt.api.mystenlabs.com/get_salt'
-
-const SS_STATE   = 'vektor_zk_state'    // sessionStorage key for ephemeral state
-const SS_SESSION = 'vektor_zk_session'  // sessionStorage key for persisted session
-
-// ─── Serialisable session (persisted in sessionStorage) ───────────────────────
-
-interface StoredSession {
-  privKey:    string   // Bech32-encoded private key (from Ed25519Keypair.getSecretKey())
-  jwt:        string
-  nonce:      string
-  address:    string
-  proof:      ZkProof
-  maxEpoch:   number
-  randomness: string
+function loadEphemeral(): EphemeralSession | null {
+  try { return JSON.parse(sessionStorage.getItem(EPH_KEY) ?? 'null') }
+  catch { return null }
+}
+function saveEphemeral(s: EphemeralSession): void {
+  sessionStorage.setItem(EPH_KEY, JSON.stringify(s))
 }
 
-function storeSession(s: ZkLoginSession, randomness: string): void {
-  const stored: StoredSession = {
-    privKey:    s.ephemeralKeypair.getSecretKey(),
-    jwt:        s.jwt,
-    nonce:      s.nonce,
-    address:    s.address,
-    proof:      s.proof,
-    maxEpoch:   s.maxEpoch,
-    randomness,
-  }
-  sessionStorage.setItem(SS_SESSION, JSON.stringify(stored))
+export interface ZkUser {
+  address:   string
+  email:     string | null
+  name:      string | null
+  givenName: string | null
+  picture:   string | null
 }
-
-function loadSession(): ZkLoginSession | null {
-  try {
-    const raw = sessionStorage.getItem(SS_SESSION)
-    if (!raw) return null
-    const s: StoredSession = JSON.parse(raw)
-    return {
-      ephemeralKeypair: Ed25519Keypair.fromSecretKey(s.privKey as any),
-      jwt:      s.jwt,
-      nonce:    s.nonce,
-      address:  s.address,
-      proof:    s.proof,
-      maxEpoch: s.maxEpoch,
-    }
-  } catch {
-    return null
-  }
-}
-
-// ─── Salt helper ──────────────────────────────────────────────────────────────
-
-async function fetchSalt(jwt: string): Promise<string> {
-  try {
-    const res  = await fetch(SALT_SERVICE, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ token: jwt }),
-    })
-    if (!res.ok) throw new Error('salt service error')
-    const { salt } = await res.json() as { salt: string }
-    return salt
-  } catch {
-    // Fallback: deterministic salt derived from a fixed value per session.
-    // ⚠  In production, always use the Mysten salt service or your own
-    //    persistent salt store so the user always gets the same Sui address.
-    return BigInt(0).toString()
-  }
-}
-
-// ─── Hook ────────────────────────────────────────────────────────────────────
 
 export interface ZkLoginState {
-  /** The active zkLogin session, or null if not signed in. */
-  session:   ZkLoginSession | null
-  /** True while the OAuth callback is being processed. */
-  loading:   boolean
-  /** Human-readable error message, or null. */
-  error:     string | null
-  /** True when VITE_GOOGLE_CLIENT_ID is configured. */
-  available: boolean
-  /** Redirect user to Google OAuth. */
-  login:     () => Promise<void>
-  /** Clear the session. */
-  logout:    () => void
+  user:    ZkUser | null
+  loading: boolean
+  signIn:  () => Promise<void>
+  signOut: () => Promise<void>
+  /** Send a demo transfer end-to-end — returns the on-chain digest. */
+  send:    (opts?: { to?: string; amountMist?: number }) => Promise<string>
+  /** Sign already-built TransactionData bytes (BCS) and submit. Returns digest. */
+  signAndExecuteBytes: (txBytesB64: string) => Promise<string>
+  refresh: () => Promise<void>
 }
 
 export function useZkLogin(): ZkLoginState {
-  const [session,   setSession]   = useState<ZkLoginSession | null>(loadSession)
-  const [loading,   setLoading]   = useState(false)
-  const [error,     setError]     = useState<string | null>(null)
+  const [user,    setUser]    = useState<ZkUser | null>(null)
+  const [loading, setLoading] = useState(true)
 
-  // ── Handle OAuth callback on mount ─────────────────────────────────────────
-  useEffect(() => {
-    const hash = window.location.hash
-    if (!hash.includes('id_token=')) return
-
-    // Extract JWT from the hash fragment
-    const hashParams = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash)
-    const jwt        = hashParams.get('id_token')
-    if (!jwt) return
-
-    // Clean the URL so a refresh doesn't re-trigger the callback
-    window.history.replaceState({}, '', window.location.pathname + window.location.search)
-
-    // Restore ephemeral state that was saved before the redirect
-    const stateRaw = sessionStorage.getItem(SS_STATE)
-    if (!stateRaw) {
-      setError('Login state expired — please try again.')
-      return
-    }
-
-    sessionStorage.removeItem(SS_STATE)
-    setLoading(true)
-    setError(null)
-
-    ;(async () => {
-      try {
-        const ephState = JSON.parse(stateRaw)
-        const auth     = ZkLoginAuth.fromEphemeralState(NETWORK, {
-          clientId:    CLIENT_ID ?? '',
-          redirectUri: REDIRECT_URI,
-          provider:    'google',
-        }, ephState)
-
-        const salt        = await fetchSalt(jwt)
-        const zkSession   = await auth.handleCallback(jwt, salt)
-
-        storeSession(zkSession, ephState.randomness)
-        setSession(zkSession)
-      } catch (e: any) {
-        setError(e?.message ?? 'zkLogin failed — please try again.')
-      } finally {
-        setLoading(false)
-      }
-    })()
-  }, [])
-
-  // ── login() — step 1: generate URL & redirect ──────────────────────────────
-  const login = useCallback(async () => {
-    if (!CLIENT_ID) {
-      setError('VITE_GOOGLE_CLIENT_ID is not set. See .env.example for setup instructions.')
-      return
-    }
-    setLoading(true)
-    setError(null)
+  const refresh = useCallback(async () => {
     try {
-      const auth         = new ZkLoginAuth(NETWORK, {
-        clientId:    CLIENT_ID,
-        redirectUri: REDIRECT_URI,
-        provider:    'google',
-      })
-      const { url }      = await auth.generateLoginUrl()
-      const ephState     = auth.exportEphemeralState()
-      sessionStorage.setItem(SS_STATE, JSON.stringify(ephState))
-      window.location.href = url
-    } catch (e: any) {
-      setError(e?.message ?? 'Failed to generate login URL.')
+      const r = await fetch('/api/zklogin/me').then(r => r.json())
+      setUser(r.signedIn ? {
+        address:   r.address,
+        email:     r.email,
+        name:      r.name,
+        givenName: r.givenName ?? (r.name ? String(r.name).split(' ')[0] : null),
+        picture:   r.picture ?? null,
+      } : null)
+    } finally {
       setLoading(false)
     }
   }, [])
 
-  // ── logout() ───────────────────────────────────────────────────────────────
-  const logout = useCallback(() => {
-    sessionStorage.removeItem(SS_SESSION)
-    sessionStorage.removeItem(SS_STATE)
-    setSession(null)
-    setError(null)
+  useEffect(() => { void refresh() }, [refresh])
+
+  /** Create ephemeral session locally, then bounce to Google. */
+  const signIn = useCallback(async () => {
+    const { epoch } = await fetch('/api/zklogin/epoch').then(r => r.json())
+    const eph       = createEphemeralSession(Number(epoch))
+    saveEphemeral(eph)
+    window.location.href = `/api/zklogin/login?nonce=${encodeURIComponent(eph.nonce)}`
   }, [])
 
-  return {
-    session,
-    loading,
-    error,
-    available: !!CLIENT_ID,
-    login,
-    logout,
-  }
+  const signOut = useCallback(async () => {
+    sessionStorage.removeItem(EPH_KEY)
+    await fetch('/api/zklogin/logout', { method: 'POST' }).catch(() => {})
+    setUser(null)
+  }, [])
+
+  /**
+   * prepare → sign locally with ephemeral key → execute. Returns the digest.
+   * Real chat-driven flows will call other PTB-building endpoints and reuse
+   * this function's sign+execute half — only the prepare URL differs.
+   */
+  const send = useCallback(
+    async (opts?: { to?: string; amountMist?: number }): Promise<string> => {
+      const eph = loadEphemeral()
+      if (!eph) throw new Error('No ephemeral session — sign in again.')
+
+      const { txBytesB64 } = await fetch('/api/zklogin/prepare', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(opts ?? {}),
+      }).then(r => r.json())
+
+      const userSignature = await signTxBytes(eph, fromBase64(txBytesB64))
+
+      const res = await fetch('/api/zklogin/execute', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          txBytesB64,
+          userSignature,
+          ephemeralPubKeyB64: eph.publicKeyB64,
+          maxEpoch:           eph.maxEpoch,
+          randomness:         eph.randomness,
+        }),
+      }).then(r => r.json())
+
+      if (!res.digest) throw new Error(res.detail ?? res.error ?? 'execute failed')
+      return res.digest as string
+    },
+    [],
+  )
+
+  /**
+   * Sign already-built TransactionData (BCS) bytes with the ephemeral key and
+   * submit via /api/zklogin/execute. Use this for swap / NAVI / batch / send
+   * PTBs that the server constructs in other endpoints.
+   */
+  const signAndExecuteBytes = useCallback(async (txBytesB64: string): Promise<string> => {
+    const eph = loadEphemeral()
+    if (!eph) throw new Error('No ephemeral session — sign in again.')
+
+    const userSignature = await signTxBytes(eph, fromBase64(txBytesB64))
+
+    const res = await fetch('/api/zklogin/execute', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        txBytesB64,
+        userSignature,
+        ephemeralPubKeyB64: eph.publicKeyB64,
+        maxEpoch:           eph.maxEpoch,
+        randomness:         eph.randomness,
+      }),
+    }).then(r => r.json())
+
+    if (!res.digest) throw new Error(res.detail ?? res.error ?? 'execute failed')
+    return res.digest as string
+  }, [])
+
+  return { user, loading, signIn, signOut, send, signAndExecuteBytes, refresh }
 }

@@ -43,9 +43,15 @@ interface Portfolio {
 }
 
 interface SidebarProps {
-  wallet:    string | null
-  portfolio: Portfolio | null
-  onRefresh: () => void
+  wallet:        string | null
+  portfolio:     Portfolio | null
+  onRefresh:     () => void
+  mobileOpen?:   boolean   // controls slide-over visibility below md
+  onMobileClose?: () => void
+  // Mobile-only page switcher (chat / echo). Desktop has its own nav in the header.
+  currentPage?:   'chat' | 'echo'
+  onPageChange?:  (page: 'chat' | 'echo') => void
+  echoAlertCount?: number
 }
 
 type Tab = 'portfolio' | 'history' | 'scheduled' | 'watching' | 'positions'
@@ -93,7 +99,7 @@ function intentColor(type: string): string {
   return 'text-slate-400'
 }
 
-export function Sidebar({ wallet, portfolio, onRefresh }: SidebarProps) {
+export function Sidebar({ wallet, portfolio, onRefresh, mobileOpen = false, onMobileClose, currentPage, onPageChange, echoAlertCount = 0 }: SidebarProps) {
   const [tab,        setTab]        = useState<Tab>('portfolio')
   const [open,       setOpen]       = useState(true)
   const [scheduled,  setScheduled]  = useState<ScheduledItem[]>([])
@@ -147,10 +153,11 @@ export function Sidebar({ wallet, portfolio, onRefresh }: SidebarProps) {
   }
 
   if (!open) {
+    // Desktop-only edge toggle (mobile uses the hamburger in the header instead)
     return (
       <button
         onClick={() => setOpen(true)}
-        className="fixed right-0 top-1/2 -translate-y-1/2 bg-[#111118] border border-white/8 text-slate-500 text-xs px-2 py-6 rounded-l-lg hover:border-purple-500/30 hover:text-purple-300 transition-colors z-10"
+        className="hidden md:block fixed right-0 top-1/2 -translate-y-1/2 bg-[#111118] border border-white/8 text-slate-500 text-xs px-2 py-6 rounded-l-lg hover:border-purple-500/30 hover:text-purple-300 transition-colors z-10"
         title="Open sidebar"
       >
         ‹
@@ -167,14 +174,55 @@ export function Sidebar({ wallet, portfolio, onRefresh }: SidebarProps) {
   ]
 
   return (
-    <div className="w-72 shrink-0 border-l border-white/5 bg-[#0d0d12] flex flex-col">
+    <>
+      {/* Mobile backdrop — md:hidden, only visible when drawer is open */}
+      <div
+        onClick={onMobileClose}
+        className={`md:hidden fixed inset-0 bg-black/60 z-30 transition-opacity ${
+          mobileOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+      />
+
+      <div
+        className={[
+          // Mobile: fixed slide-over drawer
+          'fixed inset-y-0 right-0 z-40 w-[85vw] max-w-sm transform transition-transform duration-300',
+          mobileOpen ? 'translate-x-0' : 'translate-x-full',
+          // Desktop: restore inline w-72 (original layout)
+          'md:static md:translate-x-0 md:w-72 md:max-w-none md:transform-none md:transition-none md:z-auto md:shrink-0',
+          // Shared
+          'border-l border-white/5 bg-[#0d0d12] flex flex-col',
+        ].join(' ')}
+      >
+      {/* Mobile-only page switcher (Chat / Echo). Desktop uses the header nav. */}
+      {onPageChange && (
+        <div className="md:hidden flex gap-2 p-3 border-b border-white/5 shrink-0">
+          {(['chat', 'echo'] as const).map(page => (
+            <button
+              key={page}
+              onClick={() => { onPageChange(page); onMobileClose?.() }}
+              className={`flex-1 py-2.5 rounded-lg text-xs font-mono uppercase tracking-widest transition-colors flex items-center justify-center gap-1.5 ${
+                currentPage === page
+                  ? 'bg-purple-600/20 border border-purple-500/30 text-purple-300'
+                  : 'border border-white/8 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {page === 'echo' && echoAlertCount > 0 && (
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
+              )}
+              {page}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Tab bar */}
       <div className="flex border-b border-white/5 shrink-0">
         {TABS.map(t => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`flex-1 py-3 text-[9px] uppercase tracking-widest font-mono transition-colors ${
+            className={`flex-1 py-3 min-h-[44px] md:min-h-0 text-[11px] md:text-[9px] uppercase tracking-widest font-mono transition-colors ${
               tab === t.key
                 ? 'text-purple-400 border-b border-purple-500'
                 : 'text-slate-600 hover:text-slate-400'
@@ -298,7 +346,7 @@ export function Sidebar({ wallet, portfolio, onRefresh }: SidebarProps) {
                   </span>
                   <button
                     onClick={() => cancelScheduled(item.id)}
-                    className="text-[10px] text-slate-600 hover:text-red-400 transition-colors"
+                    className="text-sm md:text-[10px] min-h-[40px] md:min-h-0 px-2 -mx-2 text-slate-600 hover:text-red-400 transition-colors"
                   >
                     cancel
                   </button>
@@ -329,7 +377,7 @@ export function Sidebar({ wallet, portfolio, onRefresh }: SidebarProps) {
                   <span className="text-[10px] font-mono text-yellow-400 uppercase tracking-widest">· WATCHING</span>
                   <button
                     onClick={() => cancelCondition(c.id)}
-                    className="text-[10px] text-slate-600 hover:text-red-400 transition-colors"
+                    className="text-sm md:text-[10px] min-h-[40px] md:min-h-0 px-2 -mx-2 text-slate-600 hover:text-red-400 transition-colors"
                   >
                     cancel
                   </button>
@@ -394,6 +442,7 @@ export function Sidebar({ wallet, portfolio, onRefresh }: SidebarProps) {
           </>
         )}
       </div>
-    </div>
+      </div>
+    </>
   )
 }
