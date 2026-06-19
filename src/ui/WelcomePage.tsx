@@ -8,39 +8,38 @@
  */
 
 import { useEffect, useState } from 'react'
-import { ConnectModal, useCurrentAccount } from '@mysten/dapp-kit'
+import { useCurrentAccount } from '@mysten/dapp-kit'
 
 // ─── Feature cards ────────────────────────────────────────────────────────────
 
 const FEATURES = [
   {
-    icon: '⚡',
     title: 'Plain-English DeFi',
     body: 'Swap, lend, borrow, or DCA — just type what you want. No more juggling five different UIs.',
   },
   {
-    icon: '🛡',
     title: 'Guardian AI',
     body: 'Every trade is scored for slippage, price impact, and protocol risk before you sign anything.',
   },
   {
-    icon: '🔁',
     title: 'Automation',
     body: 'Set it and forget it — DCA schedules, price-triggered orders, and portfolio rebalancing on autopilot.',
   },
   {
-    icon: '🔑',
     title: 'zkLogin',
     body: 'No seed phrase needed. Sign in with Google and get a self-custodial Sui address in seconds.',
   },
 ]
 
-// ─── Vektor logo (inline svg) ─────────────────────────────────────────────────
+// ─── Vektor symbol (same one used on the landing & chat pages) ────────────────
 
-function VektorMark({ className }: { className?: string }) {
+function VektorSymbol({ className }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M16 2L2 28h7.5L16 14.5 22.5 28H30L16 2Z" fill="currentColor" />
+    <svg viewBox="0 0 449 449" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden="true">
+      <path d="M449 223.586L429.397 260.413L345.271 215.633L340.099 377.711L298.397 376.381L304.638 180.81L335.291 163.06L449 223.586Z" fill="currentColor"/>
+      <path fillRule="evenodd" clipRule="evenodd" d="M268.19 304.638L285.94 335.291L225.414 449L188.587 429.397L233.364 345.271L71.2894 340.099L72.6186 298.397L268.19 304.638Z" fill="currentColor"/>
+      <path fillRule="evenodd" clipRule="evenodd" d="M144.362 268.19L150.603 72.6186L108.901 71.2894L103.727 233.364L19.603 188.587L0 225.414L113.709 285.94L144.362 268.19Z" fill="currentColor"/>
+      <path fillRule="evenodd" clipRule="evenodd" d="M260.413 19.603L215.633 103.727L377.711 108.901L376.381 150.603L180.81 144.362L163.06 113.709L223.586 0L260.413 19.603Z" fill="currentColor"/>
     </svg>
   )
 }
@@ -68,8 +67,6 @@ interface Invite {
 
 export function WelcomePage({
   token,
-  onConnectOpen,
-  connectOpen = false,
   onZkLogin,
   zkAvailable,
   onEnterApp,
@@ -120,7 +117,7 @@ export function WelcomePage({
 
       {/* Logo */}
       <div className="flex items-center gap-3 mb-10">
-        <VektorMark className="w-10 h-10 text-purple-400" />
+        <VektorSymbol className="w-10 h-10 text-purple-400" />
         <span className="text-2xl font-semibold tracking-tight text-white">Vektor</span>
       </div>
 
@@ -161,19 +158,8 @@ export function WelcomePage({
         </p>
       </div>
 
-      {/* CTAs */}
-      <div className="flex flex-col sm:flex-row items-center gap-3 mb-14">
-        {/* Standard wallet connect */}
-        <ConnectModal
-          trigger={
-            <button className="px-6 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-sm font-semibold transition-colors shadow-lg shadow-purple-600/20">
-              Connect Wallet
-            </button>
-          }
-          open={connectOpen}
-          onOpenChange={onConnectOpen ?? (() => {})}
-        />
-
+      {/* CTAs — Google sign-in only, Skip beneath it */}
+      <div className="flex flex-col items-center gap-3 mb-14">
         {/* zkLogin Google sign-in */}
         {zkAvailable && onZkLogin && (
           <button
@@ -210,7 +196,6 @@ export function WelcomePage({
             className="rounded-xl border border-white/5 bg-white/[0.02] p-5 space-y-2"
           >
             <div className="flex items-center gap-2.5">
-              <span className="text-xl">{f.icon}</span>
               <span className="text-sm font-semibold text-white">{f.title}</span>
             </div>
             <p className="text-xs text-slate-500 leading-relaxed">{f.body}</p>
