@@ -1408,29 +1408,50 @@ export default function App() {
         body:   JSON.stringify({ senderAddress: effectiveAddress }),
       })
       const json = await res.json()
-      if (!json.ok) throw new Error(json.error ?? 'Failed to prepare scheduled swap')
+      if (!json.ok) throw new Error(json.error ?? 'Failed to prepare scheduled action')
 
-      // Render exactly like a normal swap — Guardian report + ConfirmationGate
-      setMessages(prev => prev.map(m =>
-        m.id === vektorMsgId
-          ? {
-              ...m,
-              loading:      false,
-              language:     json.language ?? 'en',
-              actionLabel:  json.actionLabel,
-              originalText: `Scheduled: ${json.parsedIntent?.input_asset} → ${json.parsedIntent?.output_goal}`,
-              intentType:   'swap',
-              guardData: {
-                parsedIntent: json.parsedIntent,
-                quote:        json.quote,
-                report:       json.report,
-                _rawReport:   json._rawReport,
-                quoteParams:  json.quoteParams,
-              },
-              phase: 'review' as const,
-            }
-          : m,
-      ))
+      const intentType = json.intent_type as string
+
+      if (intentType === 'send' || intentType === 'contact_payment') {
+        // SEND path — drop a regular send confirmation card; the existing
+        // handleSendSign flow reads payload.ptbParams to build + sign the PTB.
+        setMessages(prev => prev.map(m =>
+          m.id === vektorMsgId
+            ? {
+                ...m,
+                loading:     false,
+                intentType,
+                language:    json.language ?? 'en',
+                actionLabel: json.actionLabel,
+                text:        json.message,
+                payload:     json,
+                phase:       undefined,
+              }
+            : m,
+        ))
+      } else {
+        // SWAP / memecoin / etc — Guardian report + ConfirmationGate
+        setMessages(prev => prev.map(m =>
+          m.id === vektorMsgId
+            ? {
+                ...m,
+                loading:      false,
+                language:     json.language ?? 'en',
+                actionLabel:  json.actionLabel,
+                originalText: `Scheduled: ${json.parsedIntent?.input_asset} → ${json.parsedIntent?.output_goal}`,
+                intentType:   'swap',
+                guardData: {
+                  parsedIntent: json.parsedIntent,
+                  quote:        json.quote,
+                  report:       json.report,
+                  _rawReport:   json._rawReport,
+                  quoteParams:  json.quoteParams,
+                },
+                phase: 'review' as const,
+              }
+            : m,
+        ))
+      }
     } catch (err: any) {
       setMessages(prev => prev.map(m =>
         m.id === vektorMsgId

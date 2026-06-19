@@ -1542,16 +1542,22 @@ app.post('/api/execute-scheduled/:id', requireWalletSigOrZkLogin({
       res.status(404).json({ ok: false, error: 'Scheduled intent not found' }); return
     }
 
-    const fromToken  = scheduled.token.toUpperCase()
-    const toToken    = (scheduled.targetToken ?? scheduled.intent?.output_goal ?? 'USDC').toUpperCase()
-    const amount     = scheduled.amount
-    const lang       = sender !== SIM_ADDR ? getPreferredLanguage(sender) : 'en'
+    const fromToken      = scheduled.token.toUpperCase()
+    const scheduledType  = scheduled.intent?.intent_type
+    const amount         = scheduled.amount
+    const lang           = sender !== SIM_ADDR ? getPreferredLanguage(sender) : 'en'
 
-    // Balance check before hitting Routex
+    // ── Dispatch on the original intent type ────────────────────────────
+    // Earlier this handler assumed every scheduled item was a swap, so
+    // "send 0.001 SUI to adeniyi.sui in 1 minute" got executed as a
+    // SUI→USDC swap with a USDC fallback. Branch on intent_type instead.
+    const isSend = scheduledType === 'send' || scheduledType === 'contact_payment'
+
+    // Balance check — same shape for send and swap (need amount of fromToken).
     if (sender !== SIM_ADDR) {
       const actual = await getTokenBalance(sender, fromToken).catch(() => Infinity)
       if (actual < amount) {
-        const errEn = `Insufficient ${fromToken} balance for scheduled swap. You have ${actual.toFixed(4)} ${fromToken} but need ${amount} ${fromToken}.`
+        const errEn = `Insufficient ${fromToken} balance for scheduled ${isSend ? 'send' : 'swap'}. You have ${actual.toFixed(4)} ${fromToken} but need ${amount} ${fromToken}.`
         const errMsg = lang === 'en' ? errEn : await complete({
           system: 'You are Vektor. Translate this error message exactly, keeping token symbols and numbers unchanged.',
           prompt: errEn, maxTokens: 80, lang,
@@ -1559,6 +1565,43 @@ app.post('/api/execute-scheduled/:id', requireWalletSigOrZkLogin({
         res.json({ ok: false, error: errMsg, language: lang }); return
       }
     }
+
+    // ── SEND path: resolve recipient (raw 0x or SuiNS), return send-shape ──
+    if (isSend) {
+      const rawRecipient = scheduled.recipient ?? scheduled.intent?.recipient ?? ''
+      if (!rawRecipient) {
+        res.json({ ok: false, error: 'Scheduled send has no recipient.', language: lang }); return
+      }
+      let resolvedRecipient = rawRecipient
+      if (!/^0x[0-9a-fA-F]{1,64}$/.test(rawRecipient)) {
+        if (isSuiName(rawRecipient)) {
+          const r = await resolveSuiName(rawRecipient).catch(() => null)
+          if (!r) {
+            res.json({ ok: false, error: `Couldn't resolve ${rawRecipient} — that SuiNS name isn't registered.`, language: lang }); return
+          }
+          resolvedRecipient = r
+        } else {
+          res.json({ ok: false, error: `Recipient ${rawRecipient} isn't a valid address or SuiNS name.`, language: lang }); return
+        }
+      }
+
+      const shortAddr = `${resolvedRecipient.slice(0, 8)}…${resolvedRecipient.slice(-4)}`
+      const label     = rawRecipient.endsWith('.sui') ? rawRecipient : shortAddr
+      res.json({
+        ok:          true,
+        intent_type: 'send',
+        parsedIntent: { ...(scheduled.intent ?? {}), recipient: resolvedRecipient },
+        language:    lang,
+        message:     `Ready to send ${amount} ${fromToken} to ${label}.`,
+        actionLabel: `· SCHEDULED SEND · ${amount} ${fromToken} → ${label}`,
+        ptbType:     'send',
+        ptbParams:   { token: fromToken, amount, recipient: resolvedRecipient },
+      })
+      return
+    }
+
+    // ── SWAP path (existing) ────────────────────────────────────────────
+    const toToken = (scheduled.targetToken ?? scheduled.intent?.output_goal ?? 'USDC').toUpperCase()
 
     const amountIn = toBaseUnits(amount, fromToken)
     const routex   = createRoutex('mainnet', sender)
