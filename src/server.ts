@@ -1474,7 +1474,7 @@ app.post('/api/simulate', async (req, res) => {
       const bc    = (tx as any).balanceChanges ?? []
       const inB   = bc.find((b: any) => Number(b.amount) < 0)
       const outB  = bc.find((b: any) => Number(b.amount) > 0)
-      const fakeQuote = {
+      const simulatedQuote = {
         amountIn:    Math.abs(Number(inB?.amount ?? 0)).toString(),
         amountOut:   Math.abs(Number(outB?.amount ?? 0)).toString(),
         priceImpact: 0.001,
@@ -1483,7 +1483,7 @@ app.post('/api/simulate', async (req, res) => {
         fromSymbol:  'SUI',
         toSymbol:    'USDC',
       }
-      const report = await runGuardian(fakeQuote, sender, null)
+      const report = await runGuardian(simulatedQuote, sender, null)
       res.json({ ok: true, report: serializeReport(report), language: 'en', actionLabel: `· SIMULATE · SCORE ${report.score}/100` })
       return
     }
