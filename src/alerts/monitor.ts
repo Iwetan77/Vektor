@@ -54,15 +54,21 @@ async function checkWallet(wallet: string) {
     }
   }
 
-  // 3. Open memecoin positions — check against profit/stop targets
+  // 3. Open memecoin positions.
+  // Vektor has no live price oracle for arbitrary memecoins, so we deliberately
+  // never compute or show a current price or P/L — any such number would be
+  // fabricated. We only echo the target/stop the user configured and state
+  // plainly that the live price is unavailable.
   const positions = getAllOpenPositions().filter(p => p.wallet === wallet)
   for (const pos of positions) {
-    // We don't have live memecoin prices for arbitrary tokens — use mock price logic
-    // In production this would call a DEX quote API
     if (pos.profitTarget ?? pos.stopLoss) {
+      const targets = [
+        pos.profitTarget ? `target +${(pos.profitTarget * 100).toFixed(0)}%` : '',
+        pos.stopLoss     ? `stop -${(pos.stopLoss * 100).toFixed(0)}%`       : '',
+      ].filter(Boolean).join(', ')
       addAlert(wallet, {
         type:     'position',
-        message:  `Open ${pos.token} position — ${pos.profitTarget ? `profit target: +${(pos.profitTarget * 100).toFixed(0)}%` : ''}${pos.stopLoss ? ` stop-loss: -${(pos.stopLoss * 100).toFixed(0)}%` : ''}. Monitoring.`,
+        message:  `Open ${pos.token} position — live price unavailable, monitoring ${targets}.`,
         severity: 'info',
       })
     }
