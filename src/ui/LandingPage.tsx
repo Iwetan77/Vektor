@@ -175,7 +175,13 @@ export function LandingPage() {
           <div className="pt-8 text-center space-y-4">
             <p className="text-sm text-slate-500">Ready when you are.</p>
             <button
-              onClick={() => { void signIn() }}
+              onClick={async () => {
+                try { await signIn() }
+                catch (err) {
+                  console.error('[LandingPage] signIn failed:', err)
+                  alert('Sign-in failed: ' + (err instanceof Error ? err.message : String(err)))
+                }
+              }}
               disabled={loading}
               className="inline-flex items-center justify-center gap-2.5 px-6 py-3.5 rounded-xl bg-white text-[#1a1a1a] font-semibold text-sm hover:bg-white/90 disabled:opacity-50 transition-colors min-h-[48px]"
             >

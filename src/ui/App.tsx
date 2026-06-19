@@ -46,6 +46,7 @@ interface ChatMessage {
   executionDigest?: string
   executionError?:  string
   language?:        string   // ISO 639-1 code of detected language
+  recordId?:        string   // History record id — used to report final exec status
 }
 
 /* ─── Vektor SVG components ──────────────────────────────────────────────── */
@@ -980,9 +981,12 @@ const ALL_FEATURES: FeatureEntry[] = [
   { category: 'Groups',     starter: '/group add ',    label: 'Add a member to an existing group',       hint: 'e.g. /group add Staff Dave 0x...'                 },
   // ── Onboard ──────────────────────────────────────────────────────────────
   { category: 'Onboard',    starter: '/onboard ',      label: 'Send a funded invite link to onboard a friend', hint: 'e.g. /onboard a friend with $5'             },
+  // ── Chat ─────────────────────────────────────────────────────────────────
+  { category: 'Chat',       starter: '/clear',         label: 'Clear the current conversation',           hint: 'wipes the chat — your History tab is untouched'  },
+  { category: 'Chat',       starter: '/new',           label: 'Start a fresh chat',                       hint: 'same as /clear'                                  },
 ]
 
-const CATEGORY_ORDER = ['Swap', 'NAVI', 'Automate', 'Conditions', 'Portfolio', 'Payments', 'Contacts', 'Groups', 'Onboard']
+const CATEGORY_ORDER = ['Swap', 'NAVI', 'Automate', 'Conditions', 'Portfolio', 'Payments', 'Contacts', 'Groups', 'Onboard', 'Chat']
 const CATEGORY_COLOR: Record<string, string> = {
   Swap:       'text-purple-400',
   NAVI:       'text-emerald-400',
@@ -993,6 +997,7 @@ const CATEGORY_COLOR: Record<string, string> = {
   Contacts:   'text-pink-400',
   Groups:     'text-indigo-400',
   Onboard:    'text-teal-400',
+  Chat:       'text-slate-400',
 }
 
 interface SlashMenuProps {
@@ -1300,7 +1305,22 @@ export default function App() {
   /* ── Send message ─────────────────────────────────────────────────── */
   async function sendMessage(text: string) {
     const trimmed = text.trim()
-    if (!trimmed || !effectiveAddress || isLoading) return
+    if (!trimmed) return
+
+    // ── Client-side chat commands — handled in the browser, never sent to the
+    // model or the chain. These mirror the familiar /new · /clear convention.
+    const cmd = trimmed.toLowerCase()
+    if (cmd === '/clear' || cmd === '/new' || cmd === '/reset') {
+      abortRef.current?.abort()
+      abortRef.current = null
+      setMessages([])
+      setInput('')
+      setIsLoading(false)
+      setShowSlashMenu(false)
+      return
+    }
+
+    if (!effectiveAddress || isLoading) return
 
     const controller  = new AbortController()
     abortRef.current  = controller
@@ -1354,6 +1374,7 @@ export default function App() {
                               : json.actionLabel,
                 originalText: trimmed,
                 intentType,
+                recordId:     json.recordId,
                 guardData: {
                   parsedIntent: json.parsedIntent,
                   quote:        json.quote,
@@ -1380,6 +1401,7 @@ export default function App() {
               actionLabel: json.actionLabel,
               text:        json.message,
               payload:     json,
+              recordId:    json.recordId,
               phase:       undefined,
             }
           : m,
@@ -1509,6 +1531,27 @@ export default function App() {
   }, [effectiveAddress])
 
   /* ── Sign NAVI transaction ────────────────────────────────────────── */
+  /**
+   * Report the final execution status of a write intent back to the server so
+   * the History tab reflects reality. /api/intent leaves these records 'pending';
+   * this flips them to success/failed once the browser finishes (or fails)
+   * signing. Best-effort — a missing recordId or network error is non-fatal.
+   * Skip when re-signing is in progress (NEED_RESIGN) — the record should stay
+   * pending because execution will resume after the Google round-trip.
+   */
+  async function reportIntentStatus(msgId: string, status: 'success' | 'failed') {
+    if (!effectiveAddress) return
+    const recordId = messages.find(m => m.id === msgId)?.recordId
+    if (!recordId) return
+    try {
+      await fetch('/api/intent-status', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ wallet: effectiveAddress, recordId, status }),
+      })
+    } catch { /* History status is cosmetic — never block the user on it */ }
+  }
+
   async function handleNaviSign(msgId: string) {
     const msg = messages.find(m => m.id === msgId)
     if (!msg?.payload || !effectiveAddress) return
@@ -1537,6 +1580,7 @@ export default function App() {
       setMessages(prev => prev.map(m =>
         m.id === msgId ? { ...m, actionLabel: '· EXECUTED · NAVI', executionDigest: digest } : m
       ))
+      void reportIntentStatus(msgId, 'success')
       setTimeout(refreshPortfolio, 3000)
     } catch (err: any) {
       const errMsg = err instanceof Error ? err.message : String(err)
@@ -1544,6 +1588,7 @@ export default function App() {
       setMessages(prev => prev.map(m =>
         m.id === msgId ? { ...m, actionLabel: label, text: isNeedResign(err) ? errMsg : `Transaction failed: ${errMsg}` } : m
       ))
+      if (!isNeedResign(err)) void reportIntentStatus(msgId, 'failed')
     }
   }
 
@@ -1581,6 +1626,7 @@ export default function App() {
       setMessages(prev => prev.map(m =>
         m.id === msgId ? { ...m, actionLabel: '· EXECUTED · BATCH', executionDigest: digest } : m
       ))
+      void reportIntentStatus(msgId, 'success')
       setTimeout(refreshPortfolio, 3000)
     } catch (err: any) {
       const errMsg = err instanceof Error ? err.message : String(err)
@@ -1588,6 +1634,7 @@ export default function App() {
       setMessages(prev => prev.map(m =>
         m.id === msgId ? { ...m, actionLabel: label, executionError: errMsg } : m
       ))
+      if (!isNeedResign(err)) void reportIntentStatus(msgId, 'failed')
     }
   }
 
@@ -1628,6 +1675,7 @@ export default function App() {
           executionDigest: digest,
         } : m
       ))
+      void reportIntentStatus(msgId, 'success')
       setTimeout(refreshPortfolio, 3000)
     } catch (err: any) {
       const errMsg = err instanceof Error ? err.message : String(err)
@@ -1635,6 +1683,7 @@ export default function App() {
       setMessages(prev => prev.map(m =>
         m.id === msgId ? { ...m, actionLabel: label, executionError: errMsg } : m
       ))
+      if (!isNeedResign(err)) void reportIntentStatus(msgId, 'failed')
     }
   }
 
@@ -1715,6 +1764,7 @@ export default function App() {
           executionDigest: digest,
         } : m,
       ))
+      void reportIntentStatus(msgId, 'success')
       setTimeout(refreshPortfolio, 3000)
     } catch (err: any) {
       const label = isNeedResign(err) ? '· RE-SIGNING IN…' : '· ERROR'
@@ -1727,6 +1777,7 @@ export default function App() {
           text:        err.message ?? 'Execution failed.',
         } : m,
       ))
+      if (!isNeedResign(err)) void reportIntentStatus(msgId, 'failed')
     }
   }
 

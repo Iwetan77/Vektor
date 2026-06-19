@@ -117,6 +117,20 @@ app.set('json replacer', (_key: string, val: unknown) =>
 
 const SIM_ADDR = '0x0000000000000000000000000000000000000000000000000000000000000001'
 
+/**
+ * Intent types whose work is only half-done when /api/intent returns: the server
+ * builds the quote/PTB (ok:true) but the browser still has to sign + submit it,
+ * which can fail. Their History record stays 'pending' until the client reports
+ * the real outcome via POST /api/intent-status. Everything not in this set
+ * (read-only queries, schedule/condition creation, onboard) is complete on return.
+ */
+const NEEDS_CLIENT_SIGNATURE: ReadonlySet<string> = new Set([
+  'swap', 'buy_memecoin', 'sell_memecoin', 'exit_at_profit', 'exit_at_loss', 'exit',
+  'compound', 'rebalance', 'risk_qualified',
+  'send', 'contact_payment', 'batch_payment', 'split_payment',
+  'lend', 'borrow', 'repay',
+])
+
 const TOKEN_DECIMALS: Record<string, number> = {
   SUI: 1e9, USDC: 1e6, USDT: 1e6, DEEP: 1e6, WETH: 1e8, WBTC: 1e8, BUCK: 1e9,
 }
@@ -302,13 +316,27 @@ app.post('/api/intent', async (req, res) => {
       try { updateIntentStatus(intentSender, intentRecordId, 'failed') } catch {}
     }
   }
-  // Auto-update the history record's status from the response's ok field.
-  // For write intents that still need client signing, the UI will report final status separately;
-  // for read-only intents this correctly flips pending→success the moment the response goes out.
+  // Auto-update the history record's status from the response.
+  //
+  //   • ok === false                          → failed (parse/validation/balance rejected it)
+  //   • write intent that needs client signing → leave PENDING; the browser builds + signs
+  //                                              the PTB afterward and reports the real outcome
+  //                                              via POST /api/intent-status. Marking it
+  //                                              'success' here is the bug that made failed
+  //                                              swaps/sends show as successful in History.
+  //   • everything else (read-only, schedule/condition created, onboard) → success now.
+  //
+  // We also inject `recordId` into every successful body so the client knows which
+  // record to update once signing completes or fails.
   const originalJson = res.json.bind(res)
   res.json = ((body: any) => {
     if (intentSender && intentRecordId && body && typeof body === 'object') {
-      try { updateIntentStatus(intentSender, intentRecordId, body.ok === false ? 'failed' : 'success') } catch {}
+      if (body.ok !== false && body.recordId === undefined) body.recordId = intentRecordId
+      const status: 'success' | 'failed' | 'pending' =
+        body.ok === false                            ? 'failed'  :
+        NEEDS_CLIENT_SIGNATURE.has(body.intent_type) ? 'pending' :
+                                                       'success'
+      try { updateIntentStatus(intentSender, intentRecordId, status) } catch {}
     }
     return originalJson(body)
   }) as typeof res.json
@@ -1816,6 +1844,28 @@ app.post('/api/ptb', async (req, res) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     res.status(500).json({ ok: false, error: msg })
+  }
+})
+
+/* ─── Final execution status for a History record ─────────────────────────
+   The browser calls this after signing (or failing to sign) a write intent that
+   /api/intent left 'pending'. Without it, a swap/send that fails client-side
+   would stay misreported. recordId is the value /api/intent injected into its
+   response body. */
+
+app.post('/api/intent-status', (req, res) => {
+  try {
+    const { wallet, recordId, status } = req.body as {
+      wallet?: string; recordId?: string; status?: string
+    }
+    if (!wallet || !recordId || (status !== 'success' && status !== 'failed' && status !== 'pending')) {
+      res.status(400).json({ ok: false, error: 'wallet, recordId, and status (success|failed|pending) are required' })
+      return
+    }
+    updateIntentStatus(wallet, recordId, status)
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) })
   }
 })
 
