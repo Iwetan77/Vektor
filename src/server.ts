@@ -131,6 +131,20 @@ const NEEDS_CLIENT_SIGNATURE: ReadonlySet<string> = new Set([
   'lend', 'borrow', 'repay',
 ])
 
+/**
+ * Strip common markdown so LLM prose renders as clean plain text in the chat
+ * bubble (which is not a markdown renderer). Removes **bold**, __bold__, inline
+ * `code`, and # headings — the asterisks were showing up literally.
+ */
+function stripMarkdown(s: string): string {
+  return s
+    .replace(/\*\*(.+?)\*\*/gs, '$1')
+    .replace(/__(.+?)__/gs, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .trim()
+}
+
 const TOKEN_DECIMALS: Record<string, number> = {
   SUI: 1e9, USDC: 1e6, USDT: 1e6, DEEP: 1e6, WETH: 1e8, WBTC: 1e8, BUCK: 1e9,
 }
@@ -341,7 +355,7 @@ app.post('/api/intent', async (req, res) => {
     return originalJson(body)
   }) as typeof res.json
   try {
-    const { text, senderAddress } = req.body as { text: string; senderAddress?: string }
+    const { text, senderAddress, firstName } = req.body as { text: string; senderAddress?: string; firstName?: string }
     const sender = senderAddress || SIM_ADDR
     if (!text?.trim()) { res.status(400).json({ ok: false, error: 'text is required' }); return }
     intentSender = sender
@@ -394,6 +408,23 @@ app.post('/api/intent', async (req, res) => {
         recipient,
         message:     msg,
         actionLabel: `· ONBOARD${recipient ? ` · ${recipient}` : ''} · ${amountLabel}`,
+      })
+      return
+    }
+
+    // ── Fast-path: greetings / small talk — skip the LLM, answer warmly ──────
+    // "hi", "hello", "hey vektor", "gm", "yo", "good morning" → a friendly,
+    // personalized hello. Saves a Groq call and keeps Vektor feeling human.
+    if (/^\s*(hi|hello|hey|yo|hiya|gm|sup|good\s*(morning|afternoon|evening))\b[\s!.,]*(vektor)?[\s!.,]*$/i.test(text)) {
+      const who = firstName?.trim() ? firstName.trim().split(/\s+/)[0] : null
+      res.json({
+        ok: true,
+        intent_type: 'general',
+        language: 'en',
+        message: who
+          ? `Hey ${who} — what can I do for you today? You can swap, lend, send, automate, or just ask about your wallet.`
+          : `Hey — what can I do for you today? You can swap, lend, send, automate, or just ask about your wallet.`,
+        actionLabel: '· VEKTOR',
       })
       return
     }
@@ -518,11 +549,12 @@ app.post('/api/intent', async (req, res) => {
         ? `NAVI: supplied ${JSON.stringify(portfolio.navi.supplyBalances)}, borrowed ${JSON.stringify(portfolio.navi.borrowBalances)}, HF ${portfolio.navi.healthFactor?.toFixed(2)}`
         : 'No NAVI positions'
 
-      const message = await complete({
-        system: 'You are Vektor, a DeFi portfolio analyst on Sui. Analyze the user\'s portfolio and give 3-5 specific, actionable recommendations. Mention yield opportunities, risk factors, and diversification. Be concise but specific.',
+      const rawMessage = await complete({
+        system: 'You are Vektor, a DeFi portfolio analyst on Sui. Analyze the user\'s portfolio and give 3-5 specific, actionable recommendations. Mention yield opportunities, risk factors, and diversification. Be concise but specific. Write in plain text only — do NOT use markdown formatting (no **bold**, no #, no backticks).',
         prompt: `Wallet: ${sender.slice(0, 8)}…\nTotal: ${totalStr}\nHoldings: ${assets || 'none'}\n${naviInfo}`,
         maxTokens: 400, lang,
       }).catch(() => `Portfolio value: ${totalStr}. ${assets || 'No tokens detected'}.`)
+      const message = stripMarkdown(rawMessage)
       res.json({
         ok: true, intent_type: intent, parsedIntent: parsed,
         portfolio, language: lang, message,

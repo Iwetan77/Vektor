@@ -224,7 +224,7 @@ export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
           {!loading && !error && tab === 'contacts' && (
             <>
               {/* Add contact form */}
-              <form onSubmit={handleAddContact} className="rounded-xl border border-white/8 bg-[#111118] p-4 space-y-3">
+              <form onSubmit={handleAddContact} className="rounded-xl bg-[#111118] p-4 space-y-3">
                 <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500">New Contact</p>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                   <input
@@ -265,7 +265,7 @@ export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
                   {contacts.map(c => (
                     <div
                       key={c.name}
-                      className="flex items-center justify-between px-4 py-3 rounded-xl bg-[#111118] border border-white/5"
+                      className="flex items-center justify-between px-4 py-3 rounded-xl bg-[#111118]"
                     >
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
@@ -300,7 +300,7 @@ export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
           {!loading && !error && tab === 'groups' && (
             <>
               {/* Create group form */}
-              <form onSubmit={handleCreateGroup} className="rounded-xl border border-white/8 bg-[#111118] p-4 space-y-3">
+              <form onSubmit={handleCreateGroup} className="rounded-xl bg-[#111118] p-4 space-y-3">
                 <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500">New Group</p>
                 <input
                   value={groupName}
@@ -359,7 +359,7 @@ export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
               ) : (
                 <div className="space-y-3">
                   {groups.map(g => (
-                    <div key={g.name} className="rounded-xl border border-white/5 bg-[#111118] p-4 space-y-3">
+                    <div key={g.name} className="rounded-xl bg-[#111118] p-4 space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="text-sm font-semibold text-white">{g.name}</span>
                         <span className="text-[10px] text-slate-600">{g.members.length} members</span>
