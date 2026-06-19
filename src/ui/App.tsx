@@ -993,9 +993,11 @@ const ALL_FEATURES: FeatureEntry[] = [
   { category: 'Groups',     starter: '/group list',    label: 'List all your groups',                    hint: 'just send as-is'                                  },
   { category: 'Groups',     starter: '/group show ',   label: 'See who is in a group',                   hint: 'e.g. /group show Staff'                           },
   { category: 'Groups',     starter: '/group add ',    label: 'Add a member to an existing group',       hint: 'e.g. /group add Staff Dave 0x...'                 },
+  // ── Onboard ──────────────────────────────────────────────────────────────
+  { category: 'Onboard',    starter: '/onboard ',      label: 'Send a funded invite link to onboard a friend', hint: 'e.g. /onboard a friend with $5'             },
 ]
 
-const CATEGORY_ORDER = ['Swap', 'NAVI', 'Automate', 'Conditions', 'Portfolio', 'Payments', 'Contacts', 'Groups']
+const CATEGORY_ORDER = ['Swap', 'NAVI', 'Automate', 'Conditions', 'Portfolio', 'Payments', 'Contacts', 'Groups', 'Onboard']
 const CATEGORY_COLOR: Record<string, string> = {
   Swap:       'text-purple-400',
   NAVI:       'text-emerald-400',
@@ -1005,6 +1007,7 @@ const CATEGORY_COLOR: Record<string, string> = {
   Payments:   'text-orange-400',
   Contacts:   'text-pink-400',
   Groups:     'text-indigo-400',
+  Onboard:    'text-teal-400',
 }
 
 interface SlashMenuProps {
