@@ -112,6 +112,12 @@ export function WelcomePage({
     ? `${invite.creatorWallet.slice(0, 6)}…${invite.creatorWallet.slice(-4)}`
     : null
 
+  // USDC reads naturally with a leading "$"; SUI (and anything else) does not.
+  const fmtAmount = (amt: number, sym?: string) => {
+    const s = (sym ?? 'USDC').toUpperCase()
+    return s === 'USDC' ? `$${amt} USDC` : `${amt} ${s}`
+  }
+
   return (
     <div className="min-h-screen bg-[#0a0a0f] flex flex-col items-center justify-center px-4 py-16">
 
@@ -125,19 +131,19 @@ export function WelcomePage({
       {token && !inviteLoading && invite && (
         <div className="mb-8 px-5 py-3 rounded-full border border-purple-500/30 bg-purple-500/10 text-sm text-purple-300">
           <span className="font-mono text-white/60">{shortWallet}</span>
-          {' '}invited you to Vektor with ${invite.amount} {invite.token_symbol}
+          {' '}invited you to Vektor with {fmtAmount(invite.amount, invite.token_symbol)}
         </div>
       )}
 
       {/* Claim status */}
       {token && invite && claim.state === 'pending' && (
         <div className="mb-6 px-5 py-3 rounded-xl border border-blue-500/20 bg-blue-500/5 text-sm text-blue-200">
-          Sending your ${invite.amount} {invite.token_symbol}…
+          Sending your {fmtAmount(invite.amount, invite.token_symbol)}…
         </div>
       )}
       {token && claim.state === 'done' && (
         <div className="mb-6 px-5 py-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-sm text-emerald-200">
-          ✓ Your ${claim.amount} has arrived.
+          ✓ Your {fmtAmount(claim.amount, invite?.token_symbol)} has arrived.
           <span className="block text-[10px] text-emerald-300/70 font-mono mt-1">tx: {claim.digest}</span>
         </div>
       )}

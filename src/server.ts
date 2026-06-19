@@ -322,31 +322,38 @@ app.post('/api/intent', async (req, res) => {
     if (/^\/?onboard\b/i.test(text.trim())) {
       const BASE = process.env.VEKTOR_URL ?? 'http://localhost:5173'
 
-      // Parse amount: "$5", "5 USDC", "with 5", "with $5"
+      // Parse the token first ("0.0001 SUI", "5 USDC"). Onboarding pays out
+      // SUI or USDC — anything else falls back to USDC.
+      const tokenMatch = text.match(/\b(sui|usdc)\b/i)
+      const token      = (tokenMatch?.[1] ?? 'USDC').toUpperCase()
+
+      // Parse amount: "$5", "5 USDC", "0.0001 SUI", "with 5", "with $5"
       let amount = 1
       const dollarMatch  = text.match(/\$\s*(\d+(?:\.\d+)?)/)
-      const usdcMatch    = text.match(/(\d+(?:\.\d+)?)\s*USDC\b/i)
+      const tokenAmtMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:sui|usdc)\b/i)
       const withMatch    = text.match(/\bwith\s+\$?\s*(\d+(?:\.\d+)?)/i)
-      const matchedAmt   = dollarMatch?.[1] ?? usdcMatch?.[1] ?? withMatch?.[1]
+      const matchedAmt   = dollarMatch?.[1] ?? tokenAmtMatch?.[1] ?? withMatch?.[1]
       if (matchedAmt) {
         const n = parseFloat(matchedAmt)
         if (Number.isFinite(n) && n > 0) amount = n
       }
 
-      // Parse recipient name (anything after /onboard before "with"/"$"/"USDC")
+      // Parse recipient name (anything after /onboard before "with"/"$"/digit)
       const nameMatch = text.match(/^\/?onboard\s+([A-Za-z][A-Za-z0-9 _-]*?)(?:\s+with\b|\s*\$|\s+\d|\s*$)/i)
       const recipient = nameMatch?.[1]?.trim() ?? null
 
       let inviteLink: string | null = null
       let invite: { token: string; amount: number } | null = null
       if (sender !== SIM_ADDR) {
-        invite = createInviteLink(sender, amount, 'USDC')
+        invite = createInviteLink(sender, amount, token)
         inviteLink = `${BASE}?invite=${invite.token}`
       }
 
+      // USDC reads naturally with a "$"; SUI does not.
+      const amountLabel = token === 'USDC' ? `$${amount} USDC` : `${amount} ${token}`
       const who = recipient ? recipient : 'a friend'
       const msg = inviteLink
-        ? `Send this link to ${who} to claim $${amount} USDC: \`${inviteLink}\``
+        ? `Send this link to ${who} to claim ${amountLabel}: \`${inviteLink}\``
         : 'Connect your wallet to create a funded invite.'
 
       res.json({
@@ -355,9 +362,10 @@ app.post('/api/intent', async (req, res) => {
         language:    'en',
         inviteLink,
         amount,
+        token,
         recipient,
         message:     msg,
-        actionLabel: `· ONBOARD${recipient ? ` · ${recipient}` : ''} · $${amount} USDC`,
+        actionLabel: `· ONBOARD${recipient ? ` · ${recipient}` : ''} · ${amountLabel}`,
       })
       return
     }
@@ -1484,8 +1492,8 @@ app.get('/api/onboard/:token', (req, res) => {
 /* ─── Claim a funded invite — testnet USDC from VEKTOR_FUNDING_KEY ────── */
 
 // HARD CONSTRAINTS, enforced by the handler below:
-//   • Coin type:        USDC only (TESTNET_USDC_COIN_TYPE)
-//   • Amount:           exactly invite.amount, sanity-capped at 50 USDC
+//   • Coin type:        SUI (gas coin) or USDC (TESTNET_USDC_COIN_TYPE)
+//   • Amount:           exactly invite.amount, sanity-capped at 50
 //   • Recipient:        only the body's recipientAddress, no other target
 //   • One-shot:         rejects if already claimed
 const TESTNET_USDC_COIN_TYPE =
@@ -1510,10 +1518,11 @@ app.post('/api/onboard/:token/claim', claimLimiter, async (req, res) => {
     if (!invite) { res.status(404).json({ ok: false, error: 'Invite not found' }); return }
     if (invite.claimed) { res.status(409).json({ ok: false, error: 'Invite already claimed' }); return }
     if (invite.amount <= 0 || invite.amount > 50) {
-      res.status(400).json({ ok: false, error: 'Invite amount out of allowed range (0, 50] USDC' }); return
+      res.status(400).json({ ok: false, error: 'Invite amount out of allowed range (0, 50]' }); return
     }
-    if ((invite.token_symbol ?? 'USDC').toUpperCase() !== 'USDC') {
-      res.status(400).json({ ok: false, error: 'Only USDC invites are supported' }); return
+    const tokenSym = (invite.token_symbol ?? 'USDC').toUpperCase()
+    if (tokenSym !== 'USDC' && tokenSym !== 'SUI') {
+      res.status(400).json({ ok: false, error: 'Only SUI and USDC invites are supported' }); return
     }
 
     const fundingKey = process.env.VEKTOR_FUNDING_KEY
@@ -1534,23 +1543,30 @@ app.post('/api/onboard/:token/claim', claimLimiter, async (req, res) => {
     const network = (process.env.SUI_NETWORK ?? 'testnet') as 'testnet' | 'mainnet' | 'devnet'
     const client  = new SuiClient({ url: getFullnodeUrl(network), network })
 
-    const USDC_DECIMALS = 6
-    const amountBase = BigInt(Math.round(invite.amount * 10 ** USDC_DECIMALS))
-
-    // Pull USDC coin objects owned by the funding wallet
-    const coins = await client.getCoins({ owner: sender, coinType: TESTNET_USDC_COIN_TYPE, limit: 50 })
-    if (coins.data.length === 0) {
-      res.status(503).json({ ok: false, error: 'Funding wallet has no USDC coin objects' }); return
-    }
-
     const tx = new Transaction()
     tx.setSender(sender)
-    const primary = tx.object(coins.data[0].coinObjectId)
-    if (coins.data.length > 1) {
-      tx.mergeCoins(primary, coins.data.slice(1).map((c: { coinObjectId: string }) => tx.object(c.coinObjectId)))
+
+    if (tokenSym === 'SUI') {
+      // SUI: split directly from the gas coin and transfer.
+      const SUI_DECIMALS = 9
+      const amountBase = BigInt(Math.round(invite.amount * 10 ** SUI_DECIMALS))
+      const [transferCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(amountBase)])
+      tx.transferObjects([transferCoin], tx.pure.address(recipientAddress))
+    } else {
+      // USDC: pull the funding wallet's USDC coin objects, merge, split, transfer.
+      const USDC_DECIMALS = 6
+      const amountBase = BigInt(Math.round(invite.amount * 10 ** USDC_DECIMALS))
+      const coins = await client.getCoins({ owner: sender, coinType: TESTNET_USDC_COIN_TYPE, limit: 50 })
+      if (coins.data.length === 0) {
+        res.status(503).json({ ok: false, error: 'Funding wallet has no USDC coin objects' }); return
+      }
+      const primary = tx.object(coins.data[0].coinObjectId)
+      if (coins.data.length > 1) {
+        tx.mergeCoins(primary, coins.data.slice(1).map((c: { coinObjectId: string }) => tx.object(c.coinObjectId)))
+      }
+      const [transferCoin] = tx.splitCoins(primary, [tx.pure.u64(amountBase)])
+      tx.transferObjects([transferCoin], tx.pure.address(recipientAddress))
     }
-    const [transferCoin] = tx.splitCoins(primary, [tx.pure.u64(amountBase)])
-    tx.transferObjects([transferCoin], tx.pure.address(recipientAddress))
 
     const result = await client.signAndExecuteTransaction({
       signer:      keypair,
@@ -1563,7 +1579,7 @@ app.post('/api/onboard/:token/claim', claimLimiter, async (req, res) => {
     }
 
     markInviteClaimed(String(req.params.token), recipientAddress, result.digest)
-    res.json({ ok: true, digest: result.digest, amount: invite.amount, recipient: recipientAddress })
+    res.json({ ok: true, digest: result.digest, amount: invite.amount, token: tokenSym, recipient: recipientAddress })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     res.status(500).json({ ok: false, error: msg })
