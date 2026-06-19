@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { ConnectModal, useCurrentAccount, useDisconnectWallet, useSuiClientQuery, useSignAndExecuteTransaction } from '@mysten/dapp-kit'
+import { useAuthFetch } from './lib/authFetch.js'
 import { Transaction } from '@mysten/sui/transactions'
 import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from '@mysten/sui/jsonRpc'
 import { toBase64 } from '@mysten/sui/utils'
@@ -1049,6 +1050,7 @@ function SlashMenu({ filter, onSelect, onClose }: SlashMenuProps) {
 export default function App() {
   const account                = useCurrentAccount()
   const { mutate: disconnect } = useDisconnectWallet()
+  const { signedFetch }        = useAuthFetch()
 
   // zkLogin — Google OAuth-based Sui address (alternative to wallet connect)
   const zkLogin = useZkLogin()
@@ -1397,10 +1399,9 @@ export default function App() {
     ])
 
     try {
-      const res  = await fetch(`/api/execute-scheduled/${scheduleId}`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ senderAddress: account.address }),
+      const res  = await signedFetch(`/api/execute-scheduled/${scheduleId}`, {
+        method: 'POST',
+        body:   JSON.stringify({ senderAddress: account.address }),
       })
       const json = await res.json()
       if (!json.ok) throw new Error(json.error ?? 'Failed to prepare scheduled swap')

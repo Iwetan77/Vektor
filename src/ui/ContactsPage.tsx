@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect } from 'react'
+import { useAuthFetch } from './lib/authFetch.js'
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
@@ -49,6 +50,7 @@ function Spinner() {
 /* ─── ContactsPage ───────────────────────────────────────────────────────── */
 
 export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
+  const { signedFetch }         = useAuthFetch()
   const [tab,      setTab]      = useState<'contacts' | 'groups'>('contacts')
   const [contacts, setContacts] = useState<Contact[]>([])
   const [groups,   setGroups]   = useState<Group[]>([])
@@ -99,10 +101,9 @@ export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
     if (!addr.startsWith('0x') || addr.length < 10) { setAddErr('Invalid Sui address.'); return }
     setAdding(true)
     try {
-      const res  = await fetch(`/api/contacts/${wallet}`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ name, address: addr, note: addNote.trim() || undefined }),
+      const res  = await signedFetch(`/api/contacts/${wallet}`, {
+        method: 'POST',
+        body:   JSON.stringify({ name, address: addr, note: addNote.trim() || undefined }),
       })
       const json = await res.json()
       if (!json.ok) throw new Error(json.error ?? 'Failed to add contact')
@@ -117,7 +118,7 @@ export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
 
   /* ─── Delete contact ─────────────────────────────────────────────────── */
   async function handleDeleteContact(name: string) {
-    await fetch(`/api/contacts/${wallet}/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    await signedFetch(`/api/contacts/${wallet}/${encodeURIComponent(name)}`, { method: 'DELETE' })
     setContacts(prev => prev.filter(c => c.name !== name))
   }
 
@@ -152,10 +153,9 @@ export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
     }
     setCreatingGroup(true)
     try {
-      const res  = await fetch(`/api/groups/${wallet}`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ name, members }),
+      const res  = await signedFetch(`/api/groups/${wallet}`, {
+        method: 'POST',
+        body:   JSON.stringify({ name, members }),
       })
       const json = await res.json()
       if (!json.ok) throw new Error(json.error ?? 'Failed to create group')

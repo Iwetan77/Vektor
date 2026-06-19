@@ -3,6 +3,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react'
+import { useAuthFetch } from './lib/authFetch.js'
 
 interface ScheduledItem {
   id:       string
@@ -100,6 +101,7 @@ function intentColor(type: string): string {
 }
 
 export function Sidebar({ wallet, portfolio, onRefresh, mobileOpen = false, onMobileClose, currentPage, onPageChange, echoAlertCount = 0 }: SidebarProps) {
+  const { signedFetch }              = useAuthFetch()
   const [tab,        setTab]        = useState<Tab>('portfolio')
   const [open,       setOpen]       = useState(true)
   const [scheduled,  setScheduled]  = useState<ScheduledItem[]>([])
@@ -143,12 +145,12 @@ export function Sidebar({ wallet, portfolio, onRefresh, mobileOpen = false, onMo
   }, [tab])
 
   async function cancelScheduled(id: string) {
-    await fetch(`/api/schedule/${id}`, { method: 'DELETE' })
+    await signedFetch(`/api/schedule/${id}`, { method: 'DELETE' })
     setScheduled(prev => prev.filter(s => s.id !== id))
   }
 
   async function cancelCondition(id: string) {
-    await fetch(`/api/conditions/${id}`, { method: 'DELETE' })
+    await signedFetch(`/api/conditions/${id}`, { method: 'DELETE' })
     setConditions(prev => prev.filter(c => c.id !== id))
   }
 

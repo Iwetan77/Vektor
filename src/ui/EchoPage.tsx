@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useCurrentAccount }                        from '@mysten/dapp-kit'
+import { useAuthFetch }                             from './lib/authFetch.js'
 import { EchoOrb }                                  from './EchoOrb.js'
 import type {
   EchoUserData, EchoRule,
@@ -248,6 +249,7 @@ function RulesEditor({
   rules:         EchoRule[]
   onRulesChange: (rules: EchoRule[]) => void
 }) {
+  const { signedFetch }                     = useAuthFetch()
   const [input,          setInput]          = useState('')
   const [parsing,        setParsing]        = useState(false)
   const [preview,        setPreview]        = useState<{ interpretation: string; rule: EchoRule } | null>(null)
@@ -259,10 +261,9 @@ function RulesEditor({
     if (!raw) return
     setErr(null); setParsing(true); setPreview(null)
     try {
-      const res  = await fetch(`/api/echo/${wallet}/parse-rule`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ raw }),
+      const res  = await signedFetch(`/api/echo/${wallet}/parse-rule`, {
+        method: 'POST',
+        body:   JSON.stringify({ raw }),
       })
       const json = await res.json()
       if (!json.ok) throw new Error(json.error)
@@ -281,10 +282,9 @@ function RulesEditor({
     if (!preview) return
     setParsing(true)
     try {
-      const res  = await fetch(`/api/echo/${wallet}/rules`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ raw: preview.rule.raw }),
+      const res  = await signedFetch(`/api/echo/${wallet}/rules`, {
+        method: 'POST',
+        body:   JSON.stringify({ raw: preview.rule.raw }),
       })
       const json = await res.json()
       if (!json.ok) throw new Error(json.error)
@@ -298,7 +298,7 @@ function RulesEditor({
   }
 
   async function handleDeleteRule(id: string) {
-    await fetch(`/api/echo/${wallet}/rules/${id}`, { method: 'DELETE' })
+    await signedFetch(`/api/echo/${wallet}/rules/${id}`, { method: 'DELETE' })
     onRulesChange(rules.filter(r => r.id !== id))
   }
 
@@ -383,11 +383,12 @@ function SessionKeyPanel({
   onRevoke:  () => void
 }) {
   const [revoking, setRevoking] = useState(false)
+  const { signedFetch } = useAuthFetch()
 
   async function handleRevoke() {
     setRevoking(true)
     try {
-      await fetch(`/api/echo/${wallet}/session-key`, { method: 'DELETE' })
+      await signedFetch(`/api/echo/${wallet}/session-key`, { method: 'DELETE' })
       onRevoke()
     } finally {
       setRevoking(false)
@@ -438,6 +439,7 @@ interface EchoPageProps {
 export default function EchoPage({ wsAlerts }: EchoPageProps) {
   const account = useCurrentAccount()
   const wallet  = account?.address ?? null
+  const { signedFetch } = useAuthFetch()
 
   const [data,       setData]       = useState<EchoUserData | null>(null)
   const [loading,    setLoading]    = useState(true)
