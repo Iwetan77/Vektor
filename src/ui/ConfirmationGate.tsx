@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { AppState } from './App.js'
+import { PermissionCard } from './cards/PermissionCard.js'
 
 interface Props {
   report:       any
@@ -174,100 +175,43 @@ export function ConfirmationGate({ report, quote, parsedIntent, state, onConfirm
   const isRewriting = state === 'rewriting'
   const blocked     = !report.canProceed
 
-  const levelEmoji: Record<string, string> = { LOW: '✅', MEDIUM: '⚠️', HIGH: '🔶', CRITICAL: '🚫' }
-  const levelColor = ({
-    LOW:      'text-emerald-400 border-emerald-500/30 bg-emerald-500/5',
-    MEDIUM:   'text-amber-400   border-amber-500/30   bg-amber-500/5',
-    HIGH:     'text-orange-400  border-orange-500/30  bg-orange-500/5',
-    CRITICAL: 'text-red-400     border-red-500/30     bg-red-500/5',
-  } as Record<string, string>)[report.level] ?? ''
+  // Gate logic stays here; PermissionCard only renders the result.
+  const flags: any[]    = report.flags ?? []
+  const warnings        = flags.filter((f) => f.severity !== 'green')
+  const needsAck        = warnings.length > 0
+  const findings        = warnings.slice(0, 2).map((f) => ({
+    title:    f.title ?? f.class ?? 'Risk',
+    severity: f.severity ?? 'yellow',
+    message:  f.message,
+  }))
+  const confirmDisabled = blocked || isRewriting || (needsAck && !understood)
 
   return (
-    <div className={`rounded-xl border p-6 space-y-5 ${
-      blocked ? 'border-red-500/20 bg-red-500/5' : 'border-[#1e1e2e] bg-[#111118]'
-    }`}>
-      <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">{s.title}</h2>
-
-      {/* Summary card */}
-      <div className="rounded-lg bg-slate-900/60 border border-[#1e1e2e] px-5 py-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-slate-400">
-            Swap{' '}
-            <span className="text-white font-semibold">{quote.amountInFormatted} {parsedIntent.input_asset}</span>
-            {' → '}
-            <span className="text-white font-semibold">{quote.amountOutFormatted} {parsedIntent.output_goal?.toUpperCase()}</span>
-          </span>
-          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${levelColor}`}>
-            {levelEmoji[report.level] ?? ''} {report.level}
-          </span>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
-          <span>Guardian score: <span className="text-slate-300 font-mono">{report.score}/100</span></span>
-          <span>Route: <span className="text-slate-300">{quote.routeLabel}</span></span>
-          <span>Gas: <span className="text-slate-300 font-mono">~{quote.gasEstimateFormatted} SUI</span></span>
-        </div>
-      </div>
-
-      {/* Blocked message */}
-      {blocked && (
-        <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm text-red-400">
-          {s.blocked}
-        </div>
-      )}
-
-      {/* Acknowledgment checkbox for non-blocked swaps with warnings */}
-      {!blocked && report.flags.some((f: any) => f.severity !== 'green') && (
-        <label className="flex items-start gap-3 cursor-pointer group">
-          <div
-            onClick={() => setUnderstood(u => !u)}
-            className={`mt-0.5 w-5 h-5 shrink-0 rounded border flex items-center justify-center transition-colors cursor-pointer ${
-              understood ? 'bg-indigo-600 border-indigo-500' : 'border-slate-600 group-hover:border-slate-400'
-            }`}
-          >
-            {understood && (
-              <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
-            )}
-          </div>
-          <span className="text-sm text-slate-400">{s.checkbox}</span>
-        </label>
-      )}
-
-      {/* Action buttons */}
-      <div className="flex gap-3">
-        <button
-          onClick={onReset}
-          className="px-4 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-sm font-medium transition-colors"
-        >
-          {s.cancel}
-        </button>
-
-        <button
-          onClick={onConfirm}
-          disabled={
-            blocked ||
-            isRewriting ||
-            (report.flags.some((f: any) => f.severity !== 'green') && !understood)
-          }
-          className="flex-1 py-2.5 rounded-lg btn-proceed text-white text-sm font-bold disabled:opacity-30 disabled:cursor-not-allowed disabled:shadow-none transition-all flex items-center justify-center gap-2"
-        >
-          {isRewriting ? (
-            <>
-              <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="white" strokeWidth="4"/>
-                <path className="opacity-75" fill="white" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
-              </svg>
-              {s.rewriting}
-            </>
-          ) : s.proceed}
-        </button>
-      </div>
-
-      {!blocked && !understood && report.flags.some((f: any) => f.severity !== 'green') && (
-        <p className="text-xs text-slate-600 text-center">{s.hint}</p>
-      )}
-    </div>
+    <PermissionCard
+      title={s.title}
+      summary={
+        <>
+          Swap{' '}
+          <span className="text-white font-semibold">{quote.amountInFormatted} {parsedIntent.input_asset}</span>
+          {' → '}
+          <span className="text-white font-semibold">{quote.amountOutFormatted} {parsedIntent.output_goal?.toUpperCase()}</span>
+        </>
+      }
+      level={report.level}
+      score={report.score}
+      routeLabel={quote.routeLabel}
+      gasLabel={`~${quote.gasEstimateFormatted} SUI`}
+      findings={findings}
+      blocked={blocked}
+      blockedMsg={s.blocked}
+      needsAck={needsAck}
+      acknowledged={understood}
+      onToggleAck={() => setUnderstood(u => !u)}
+      confirmDisabled={confirmDisabled}
+      busy={isRewriting}
+      labels={{ confirm: s.proceed, cancel: s.cancel, ack: s.checkbox, hint: s.hint, busy: s.rewriting }}
+      onConfirm={onConfirm}
+      onCancel={onReset}
+    />
   )
 }

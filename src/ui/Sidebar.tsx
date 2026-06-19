@@ -37,6 +37,15 @@ interface IntentRecord {
   timestamp: string
 }
 
+interface AdviceEntry {
+  id:             string
+  ts:             string
+  intentType:     string
+  summary:        string
+  recommendation: string
+  riskScore:      number
+}
+
 interface Portfolio {
   totalUsd: number
   balances: Array<{ symbol: string; formatted: string; usdValue: number }>
@@ -55,7 +64,7 @@ interface SidebarProps {
   echoAlertCount?: number
 }
 
-type Tab = 'portfolio' | 'history' | 'scheduled' | 'watching' | 'positions'
+type Tab = 'portfolio' | 'history' | 'scheduled' | 'watching' | 'positions' | 'advice'
 
 function Empty({ label }: { label: string }) {
   return <p className="text-xs text-slate-600 text-center py-8">{label}</p>
@@ -108,6 +117,7 @@ export function Sidebar({ wallet, portfolio, onRefresh, mobileOpen = false, onMo
   const [conditions, setConditions] = useState<ConditionItem[]>([])
   const [positions,  setPositions]  = useState<Position[]>([])
   const [history,    setHistory]    = useState<IntentRecord[]>([])
+  const [advice,     setAdvice]     = useState<AdviceEntry[]>([])
   const [livePrices, setLivePrices] = useState<Record<string, number>>({})
 
   // Keep last known non-zero totalUsd to avoid $0.00 flicker during refresh
@@ -127,6 +137,15 @@ export function Sidebar({ wallet, portfolio, onRefresh, mobileOpen = false, onMo
     fetch(`/api/memory/${wallet}`)
       .then(r => r.json())
       .then(d => setHistory(d.memory?.intentHistory ?? []))
+      .catch(() => {})
+  }, [wallet, tab])
+
+  // Load advice log — what Vektor has recommended
+  useEffect(() => {
+    if (!wallet) { setAdvice([]); return }
+    fetch(`/api/advice/${wallet}`)
+      .then(r => r.json())
+      .then(d => setAdvice(d.advice ?? []))
       .catch(() => {})
   }, [wallet, tab])
 
@@ -173,6 +192,7 @@ export function Sidebar({ wallet, portfolio, onRefresh, mobileOpen = false, onMo
     { key: 'scheduled', label: 'Sched' },
     { key: 'watching',  label: 'Watch' },
     { key: 'positions', label: 'Pos' },
+    { key: 'advice',    label: 'Advice' },
   ]
 
   return (
@@ -329,6 +349,31 @@ export function Sidebar({ wallet, portfolio, onRefresh, mobileOpen = false, onMo
                 <p className="text-xs text-slate-300 leading-relaxed">{h.summary}</p>
                 <p className="text-[9px] text-slate-600">
                   {new Date(h.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </p>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* Advice tab — what Vektor has recommended */}
+        {tab === 'advice' && (
+          <>
+            {advice.length === 0 ? (
+              <Empty label="No advice yet. Vektor logs every recommendation it makes here." />
+            ) : advice.map(a => (
+              <div key={a.id} className="rounded-xl border border-white/5 bg-[#111118] p-3 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className={`text-[9px] font-mono uppercase tracking-widest ${intentColor(a.intentType ?? '')}`}>
+                    · {(a.intentType ?? 'unknown').replace(/_/g, ' ')}
+                  </span>
+                  <span className={`text-[9px] font-mono ${a.riskScore >= 80 ? 'text-emerald-500' : a.riskScore >= 50 ? 'text-yellow-500' : 'text-red-500'}`}>
+                    {a.riskScore}/100
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">{a.recommendation}</p>
+                <p className="text-[9px] text-slate-600 italic truncate">on "{a.summary}"</p>
+                <p className="text-[9px] text-slate-600">
+                  {new Date(a.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                 </p>
               </div>
             ))}

@@ -27,6 +27,20 @@ export interface IntentRecord {
   timestamp: string
 }
 
+/**
+ * A single recommendation Vektor has given. Lets the agent stay consistent with
+ * its own past advice instead of contradicting itself across sessions.
+ */
+export interface AdviceEntry {
+  id:             string
+  wallet:         string
+  ts:             string
+  intentType:     string
+  summary:        string   // what the user was trying to do
+  recommendation: string   // the one-line advice Vektor gave
+  riskScore:      number   // Guardian score at the time (0–100)
+}
+
 export interface UserMemory {
   wallet:              string
   lastSeen:            string
@@ -41,6 +55,7 @@ export interface UserMemory {
   naviHealthFactor?:      number
   pendingAlerts:          UserAlert[]
   intentHistory:          IntentRecord[]
+  adviceLog:              AdviceEntry[]
   stats: {
     totalIntents:    number
     totalSwapVolume: number
@@ -62,12 +77,14 @@ export function getMemory(wallet: string): UserMemory {
       preferences:   { riskTolerance: 'medium', preferredProtocols: [], typicalAmounts: {} },
       pendingAlerts: [],
       intentHistory: [],
+      adviceLog:     [],
       stats:         { totalIntents: 0, totalSwapVolume: 0, firstSeen: new Date().toISOString() },
     }
   }
   const mem = JSON.parse(fs.readFileSync(p, 'utf8')) as UserMemory
-  // backfill field for existing wallets
+  // backfill fields for existing wallets
   if (!mem.intentHistory) mem.intentHistory = []
+  if (!mem.adviceLog)     mem.adviceLog     = []
   return mem
 }
 
@@ -145,6 +162,21 @@ export function updateIntentStatus(
   if (!rec) return
   rec.status = status
   saveMemory(mem)
+}
+
+/** Append a recommendation to the advice log. Keeps the most recent 30. */
+export function addAdvice(wallet: string, entry: Omit<AdviceEntry, 'id' | 'wallet' | 'ts'>): AdviceEntry {
+  const mem = getMemory(wallet)
+  const rec: AdviceEntry = { ...entry, id: randomUUID(), wallet, ts: new Date().toISOString() }
+  mem.adviceLog.unshift(rec)
+  mem.adviceLog = mem.adviceLog.slice(0, 30)
+  saveMemory(mem)
+  return rec
+}
+
+/** Recent advice entries, newest first. */
+export function getAdvice(wallet: string, limit = 20): AdviceEntry[] {
+  return getMemory(wallet).adviceLog.slice(0, limit)
 }
 
 /**

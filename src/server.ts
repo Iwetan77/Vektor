@@ -48,7 +48,7 @@ import {
 import {
   getMemory, saveMemory, buildMemoryContext,
   getUnseenAlerts, markAlertsSeen, updatePortfolioSnapshot,
-  addAlert, incrementIntentCount, logIntent, updateIntentStatus,
+  addAlert, incrementIntentCount, logIntent, updateIntentStatus, addAdvice, getAdvice,
   getPreferredLanguage, setPreferredLanguage,
 } from './memory/index.js'
 import { startScheduler }        from './scheduler/worker.js'
@@ -1191,6 +1191,18 @@ app.post('/api/intent', async (req, res) => {
       const quoteWithSym = { ...quote, fromSymbol: fromToken, toSymbol: memeToken }
       const report       = await runGuardian(quoteWithSym, sender, null, lang)
 
+      // Advice log — record what Vektor recommended so it stays consistent later.
+      if (sender !== SIM_ADDR) {
+        try {
+          addAdvice(sender, {
+            intentType:     intent,
+            summary:        text.slice(0, 120),
+            recommendation: `${report.level ?? 'reviewed'} risk · ${fromToken} → ${memeToken} · score ${report.score}/100`,
+            riskScore:      report.score,
+          })
+        } catch { /* advice logging is best-effort */ }
+      }
+
       // Track position if auto-exit
       if (parsed.profit_target || parsed.stop_loss) {
         addPosition({
@@ -1329,6 +1341,18 @@ app.post('/api/intent', async (req, res) => {
 
     const quoteWithSym = { ...quote, fromSymbol: fromToken, toSymbol: toToken }
     const report       = await runGuardian(quoteWithSym, sender, null, lang)
+
+    // Advice log — record what Vektor recommended so it stays consistent later.
+    if (sender !== SIM_ADDR) {
+      try {
+        addAdvice(sender, {
+          intentType:     intent,
+          summary:        text.slice(0, 120),
+          recommendation: `${report.level ?? 'reviewed'} risk · ${fromToken} → ${toToken} · score ${report.score}/100`,
+          riskScore:      report.score,
+        })
+      } catch { /* advice logging is best-effort */ }
+    }
 
     res.json({
       ok: true, intent_type: intent, parsedIntent: parsed,
@@ -1922,6 +1946,17 @@ app.get('/api/alerts/:wallet', (req, res) => {
 })
 
 /* ─── Memory ─────────────────────────────────────────────────────────── */
+
+/* ─── Advice log — what Vektor has recommended for this wallet ────────── */
+
+app.get('/api/advice/:wallet', (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 20, 50)
+    res.json({ ok: true, advice: getAdvice(req.params.wallet, limit) })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) })
+  }
+})
 
 app.get('/api/memory/:wallet', (req, res) => {
   const mem     = getMemory(req.params.wallet)
