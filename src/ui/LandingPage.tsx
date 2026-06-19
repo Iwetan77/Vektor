@@ -107,7 +107,7 @@ export function LandingPage() {
             </h1>
             <p className="text-base md:text-lg text-slate-400 max-w-md leading-relaxed">
               Swap, lend, send, automate — on Sui, in plain English.
-              Signed in by Google. Powered by zkLogin.
+              Sign in with Google. Powered by zkLogin.
             </p>
           </div>
 
@@ -143,7 +143,7 @@ export function LandingPage() {
               </ul>
             </div>
             <p className="text-[10px] font-mono text-slate-600 text-center">
-              control plane ready · mainnet · Shinami zkProver
+              control plane ready · mainnet
             </p>
           </div>
         </div>

@@ -90,7 +90,6 @@ function ZkAvatarMenu({
   setAddrCopied: (v: boolean) => void
 }) {
   const [open, setOpen] = useState(false)
-  const [imgFailed, setImgFailed] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -116,31 +115,17 @@ function ZkAvatarMenu({
       <button
         onClick={() => setOpen(v => !v)}
         title={user.email ?? 'Account'}
-        className="flex items-center justify-center w-9 h-9 rounded-full border border-white/10 bg-[#111118] hover:border-purple-500/40 transition-colors overflow-hidden"
+        className="flex items-center justify-center w-9 h-9 rounded-full bg-purple-600 hover:bg-purple-500 ring-1 ring-purple-400/30 transition-colors"
       >
-        {user.picture && !imgFailed ? (
-          <img
-            src={user.picture}
-            alt=""
-            referrerPolicy="no-referrer"
-            onError={() => setImgFailed(true)}
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <span className="text-sm font-semibold text-purple-300">{initial}</span>
-        )}
+        <span className="text-sm font-semibold text-white">{initial}</span>
       </button>
 
       {open && (
         <div className="absolute right-0 mt-2 w-72 rounded-xl border border-white/10 bg-[#0e0e14] shadow-2xl shadow-black/60 z-50 overflow-hidden">
           {/* Header — picture + name/email */}
           <div className="flex items-center gap-3 p-3 border-b border-white/5">
-            <div className="w-10 h-10 rounded-full border border-white/10 bg-[#111118] overflow-hidden flex items-center justify-center shrink-0">
-              {user.picture && !imgFailed ? (
-                <img src={user.picture} alt="" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
-              ) : (
-                <span className="text-base font-semibold text-purple-300">{initial}</span>
-              )}
+            <div className="w-10 h-10 rounded-full bg-purple-600 ring-1 ring-purple-400/30 flex items-center justify-center shrink-0">
+              <span className="text-base font-semibold text-white">{initial}</span>
             </div>
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium text-white truncate">{user.name ?? user.email ?? 'Signed in'}</div>
