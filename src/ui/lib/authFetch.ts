@@ -45,22 +45,43 @@ function isUserRejection(err: unknown): boolean {
 }
 
 /**
- * React hook — wraps useSignPersonalMessage() and returns two callables:
- *   • signedHeaders(): produce a fresh-timestamp set of headers
- *   • signedFetch(url, init): like fetch() but pre-signed
+ * React hook — returns two callables that handle BOTH auth modes:
  *
- * Both throw `signature cancelled` if the user dismisses the wallet popup,
- * and `wallet not connected` if no account is connected.
+ *   1. Slush / dapp-kit wallet user → signs a personal message, attaches the
+ *      x-vektor-sig + x-vektor-timestamp + x-vektor-address headers, and the
+ *      server's requireWalletSig branch verifies them.
+ *
+ *   2. zkLogin user (no dapp-kit wallet) → there's no popup to sign with, so
+ *      we skip signing entirely. The httpOnly session cookie is sent with
+ *      every request automatically (credentials: 'include'), and the server's
+ *      requireWalletSigOrZkLogin middleware unseals it and verifies the
+ *      decoded address matches the resolved wallet.
+ *
+ * Callers don't need to know which mode the user is in — just call
+ * signedFetch and it does the right thing.
+ *
+ * Throws:
+ *   • 'signature cancelled' if a Slush user dismisses the popup
+ *   • 'not signed in'       if neither auth mode is available
  */
 export function useAuthFetch(): {
-  signedHeaders: () => Promise<SignedHeaders>
+  signedHeaders: () => Promise<SignedHeaders | null>
   signedFetch:   (url: string, init?: RequestInit) => Promise<Response>
 } {
   const account                = useCurrentAccount()
   const { mutateAsync: sign }  = useSignPersonalMessage()
 
-  const signedHeaders = useCallback(async (): Promise<SignedHeaders> => {
-    if (!account?.address) throw new Error('wallet not connected')
+  /**
+   * Returns the wallet-sig headers for adapter users, or `null` for zkLogin
+   * users (in which case the session cookie carries auth automatically).
+   * Throws only if the user has neither auth method available.
+   */
+  const signedHeaders = useCallback(async (): Promise<SignedHeaders | null> => {
+    if (!account?.address) {
+      // No dapp-kit wallet. Caller's session cookie (if any) will be checked
+      // server-side — we just return null so signedFetch knows to skip headers.
+      return null
+    }
 
     const timestamp = Date.now()
     const message   = buildMessage(account.address, timestamp)
@@ -84,12 +105,22 @@ export function useAuthFetch(): {
 
   const signedFetch = useCallback(async (url: string, init: RequestInit = {}): Promise<Response> => {
     const sigHeaders = await signedHeaders()
-    const merged: HeadersInit = { ...sigHeaders, ...(init.headers as Record<string, string> ?? {}) }
-    // Caller-supplied Content-Type wins (e.g. multipart). Our sig headers always present.
-    merged['x-vektor-address']   = sigHeaders['x-vektor-address']
-    merged['x-vektor-sig']       = sigHeaders['x-vektor-sig']
-    merged['x-vektor-timestamp'] = sigHeaders['x-vektor-timestamp']
-    return fetch(url, { ...init, headers: merged })
+    const baseHeaders: Record<string, string> = { 'Content-Type': 'application/json' }
+    const merged: Record<string, string> = {
+      ...baseHeaders,
+      ...(sigHeaders ?? {}),
+      ...(init.headers as Record<string, string> ?? {}),
+    }
+    // Sig headers always win over caller-supplied for the auth triple (so a
+    // caller can't accidentally null them out by passing headers).
+    if (sigHeaders) {
+      merged['x-vektor-address']   = sigHeaders['x-vektor-address']
+      merged['x-vektor-sig']       = sigHeaders['x-vektor-sig']
+      merged['x-vektor-timestamp'] = sigHeaders['x-vektor-timestamp']
+    }
+    // credentials:'include' so the zkLogin session cookie tags along even
+    // for cross-origin deployments (same-origin localhost sends it anyway).
+    return fetch(url, { ...init, headers: merged, credentials: 'include' })
   }, [signedHeaders])
 
   return { signedHeaders, signedFetch }

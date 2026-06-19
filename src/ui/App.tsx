@@ -1390,7 +1390,10 @@ export default function App() {
 
   /* ── Execute a due scheduled swap — calls /api/execute-scheduled/:id ─ */
   async function executeScheduled(scheduleId: string) {
-    if (!account) return
+    // Use effectiveAddress so zkLogin users (no dapp-kit `account`) work too.
+    // signedFetch handles the auth: wallet-sig headers for Slush users,
+    // session cookie for zkLogin users.
+    if (!effectiveAddress) return
 
     const vektorMsgId = crypto.randomUUID()
     setIsLoading(true)
@@ -1402,7 +1405,7 @@ export default function App() {
     try {
       const res  = await signedFetch(`/api/execute-scheduled/${scheduleId}`, {
         method: 'POST',
-        body:   JSON.stringify({ senderAddress: account.address }),
+        body:   JSON.stringify({ senderAddress: effectiveAddress }),
       })
       const json = await res.json()
       if (!json.ok) throw new Error(json.error ?? 'Failed to prepare scheduled swap')

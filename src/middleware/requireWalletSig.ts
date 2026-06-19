@@ -113,3 +113,62 @@ export function requireWalletSigOrWorkerSecret(opts: {
   }
   return handler
 }
+
+/**
+ * zkLogin-friendly auth.
+ *
+ * Accepts a request if EITHER:
+ *   1. The classic wallet-signature headers verify (Slush etc.), OR
+ *   2. A valid zkLogin session cookie is present AND its decoded address
+ *      matches the route-resolved wallet (i.e. the user is signed in via
+ *      Google → Shinami and is acting on their own data).
+ *
+ * Use this on any route the UI calls from a zkLogin-signed-in user. The
+ * session cookie is httpOnly and AES-256-GCM sealed (sealSession), so the
+ * browser can't forge it — having a valid one is proof of identity.
+ *
+ * resolveWallet is called the same way as requireWalletSig so route params
+ * or lookup callbacks (e.g. getScheduledById) still work.
+ */
+import { openSession, SESSION_COOKIE } from '../auth/zklogin-core/session.js'
+
+function readCookie(req: Request, name: string): string | undefined {
+  const header = req.headers.cookie
+  if (!header) return undefined
+  for (const part of header.split(';')) {
+    const i = part.indexOf('=')
+    if (i < 0) continue
+    if (part.slice(0, i).trim() === name) {
+      return decodeURIComponent(part.slice(i + 1).trim())
+    }
+  }
+  return undefined
+}
+
+export function requireWalletSigOrZkLogin(opts: {
+  walletParam?: string
+  resolveWallet?: (req: Request) => string | null | undefined
+} = {}): RequestHandler<Params> {
+  const walletParam = opts.walletParam ?? 'wallet'
+  const sigGuard    = requireWalletSig({ walletParam, resolveWallet: opts.resolveWallet })
+
+  const handler: RequestHandler<Params> = async (req, res, next) => {
+    // 1. zkLogin fast path — verify the session cookie owns the resolved wallet.
+    const session = openSession(readCookie(req as unknown as Request, SESSION_COOKIE))
+    if (session?.address) {
+      const raw = opts.resolveWallet
+        ? opts.resolveWallet(req as unknown as Request)
+        : (req.params as Record<string, unknown>)[walletParam]
+      const wallet = typeof raw === 'string' ? raw : null
+      if (wallet && wallet.toLowerCase() === session.address.toLowerCase()) {
+        next()
+        return
+      }
+      // session present but doesn't match — fall through to wallet sig
+    }
+
+    // 2. Fallback to classic wallet signature for adapter-wallet users.
+    await sigGuard(req, res, next)
+  }
+  return handler
+}

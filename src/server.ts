@@ -59,7 +59,7 @@ import { calculateEchoScore, scoreInsights }     from './echo/score.js'
 import { parseRule }                             from './echo/rules.js'
 import { generateSessionKeypair, storeSessionKey, buildSessionAuthPtb, DEFAULT_LIMITS } from './echo/session.js'
 import type { EchoRule } from './echo/types.js'
-import { requireWalletSig, requireWalletSigOrWorkerSecret } from './middleware/requireWalletSig.js'
+import { requireWalletSig, requireWalletSigOrWorkerSecret, requireWalletSigOrZkLogin } from './middleware/requireWalletSig.js'
 import { getConditionById } from './db/store.js'
 import { registerZkLoginRoutes } from './auth/zklogin-routes.js'
 
@@ -1346,7 +1346,7 @@ app.get('/api/schedule/:wallet', (req, res) => {
   res.json({ ok: true, scheduled: getScheduled(req.params.wallet) })
 })
 
-app.delete('/api/schedule/:id', requireWalletSig({
+app.delete('/api/schedule/:id', requireWalletSigOrZkLogin({
   resolveWallet: req => getScheduledById(String(req.params.id))?.wallet,
 }), (req, res) => {
   const ok = cancelScheduled(req.params.id)
@@ -1359,7 +1359,7 @@ app.get('/api/conditions/:wallet', (req, res) => {
   res.json({ ok: true, conditions: getConditions(req.params.wallet) })
 })
 
-app.delete('/api/conditions/:id', requireWalletSig({
+app.delete('/api/conditions/:id', requireWalletSigOrZkLogin({
   resolveWallet: req => getConditionById(String(req.params.id))?.wallet,
 }), (req, res) => {
   const ok = cancelCondition(req.params.id)
@@ -1528,7 +1528,7 @@ app.post('/api/navi-ptb', async (req, res) => {
 // Looks up the schedule by ID, runs Routex + Guardian, returns a swap response
 // identical to /api/intent so the existing ConfirmationGate flow handles signing.
 
-app.post('/api/execute-scheduled/:id', requireWalletSig({
+app.post('/api/execute-scheduled/:id', requireWalletSigOrZkLogin({
   resolveWallet: req => getScheduledById(String(req.params.id))?.wallet,
 }), async (req, res) => {
   try {
@@ -1721,7 +1721,7 @@ app.get('/api/contacts/:wallet', async (req, res) => {
   }
 })
 
-app.post('/api/contacts/:wallet', requireWalletSig(), async (req, res) => {
+app.post('/api/contacts/:wallet', requireWalletSigOrZkLogin(), async (req, res) => {
   try {
     const { name, address, note } = req.body as { name: string; address: string; note?: string }
     if (!name || !address) { res.status(400).json({ ok: false, error: 'name and address required' }); return }
@@ -1732,7 +1732,7 @@ app.post('/api/contacts/:wallet', requireWalletSig(), async (req, res) => {
   }
 })
 
-app.delete('/api/contacts/:wallet/:name', requireWalletSig(), async (req, res) => {
+app.delete('/api/contacts/:wallet/:name', requireWalletSigOrZkLogin(), async (req, res) => {
   try {
     const removed = await removeContact(req.params.wallet, decodeURIComponent(req.params.name))
     res.json({ ok: removed })
@@ -1743,7 +1743,7 @@ app.delete('/api/contacts/:wallet/:name', requireWalletSig(), async (req, res) =
 
 /* ─── Groups ──────────────────────────────────────────────────────────── */
 
-app.post('/api/groups/:wallet', requireWalletSig(), async (req, res) => {
+app.post('/api/groups/:wallet', requireWalletSigOrZkLogin(), async (req, res) => {
   try {
     const { name, members } = req.body as { name: string; members: { name: string; address: string }[] }
     if (!name) { res.status(400).json({ ok: false, error: 'group name required' }); return }
@@ -1754,7 +1754,7 @@ app.post('/api/groups/:wallet', requireWalletSig(), async (req, res) => {
   }
 })
 
-app.post('/api/groups/:wallet/:groupName/members', requireWalletSig(), async (req, res) => {
+app.post('/api/groups/:wallet/:groupName/members', requireWalletSigOrZkLogin(), async (req, res) => {
   try {
     const { name, address } = req.body as { name: string; address: string }
     if (!name || !address) { res.status(400).json({ ok: false, error: 'name and address required' }); return }
@@ -1990,7 +1990,7 @@ app.get('/api/echo/:wallet', async (req, res) => {
 })
 
 // POST /api/echo/:wallet/rules — parse + add a rule
-app.post('/api/echo/:wallet/rules', requireWalletSig(), async (req, res) => {
+app.post('/api/echo/:wallet/rules', requireWalletSigOrZkLogin(), async (req, res) => {
   try {
     const { raw, autoExecute } = req.body as { raw: string; autoExecute?: boolean }
     if (!raw?.trim()) { res.status(400).json({ ok: false, error: 'Rule text required' }); return }
@@ -2017,7 +2017,7 @@ app.post('/api/echo/:wallet/rules', requireWalletSig(), async (req, res) => {
 })
 
 // DELETE /api/echo/:wallet/rules/:id
-app.delete('/api/echo/:wallet/rules/:id', requireWalletSig(), async (req, res) => {
+app.delete('/api/echo/:wallet/rules/:id', requireWalletSigOrZkLogin(), async (req, res) => {
   try {
     const data  = await readEchoData(req.params.wallet)
     data.rules  = data.rules.filter(r => r.id !== req.params.id)
@@ -2030,7 +2030,7 @@ app.delete('/api/echo/:wallet/rules/:id', requireWalletSig(), async (req, res) =
 })
 
 // POST /api/echo/:wallet/score — recalculate and store Echo Score
-app.post('/api/echo/:wallet/score', requireWalletSig(), async (req, res) => {
+app.post('/api/echo/:wallet/score', requireWalletSigOrZkLogin(), async (req, res) => {
   try {
     const { portfolio, naviPositions } = req.body
     const score = calculateEchoScore(portfolio, naviPositions ?? null)
@@ -2047,7 +2047,7 @@ app.post('/api/echo/:wallet/score', requireWalletSig(), async (req, res) => {
 })
 
 // POST /api/echo/:wallet/session-key — generate ephemeral keypair + return PTB for user to sign
-app.post('/api/echo/:wallet/session-key', requireWalletSig(), async (req, res) => {
+app.post('/api/echo/:wallet/session-key', requireWalletSigOrZkLogin(), async (req, res) => {
   try {
     const { packageId, expiryDays = 7, maxPerTx, maxPerDay } = req.body as {
       packageId: string
@@ -2099,7 +2099,7 @@ app.post('/api/echo/:wallet/session-key', requireWalletSig(), async (req, res) =
 })
 
 // POST /api/echo/:wallet/session-key/confirm — store auth object ID after user signed
-app.post('/api/echo/:wallet/session-key/confirm', requireWalletSig(), async (req, res) => {
+app.post('/api/echo/:wallet/session-key/confirm', requireWalletSigOrZkLogin(), async (req, res) => {
   try {
     const { authObjectId, sessionAddress, expiresAt, maxAmountPerTx, maxAmountPerDay } = req.body
     const data = await readEchoData(req.params.wallet)
@@ -2113,7 +2113,7 @@ app.post('/api/echo/:wallet/session-key/confirm', requireWalletSig(), async (req
 })
 
 // DELETE /api/echo/:wallet/session-key — revoke
-app.delete('/api/echo/:wallet/session-key', requireWalletSig(), async (req, res) => {
+app.delete('/api/echo/:wallet/session-key', requireWalletSigOrZkLogin(), async (req, res) => {
   try {
     const data = await readEchoData(req.params.wallet)
     delete data.sessionKeyMetadata
@@ -2271,7 +2271,7 @@ app.post('/api/echo/:wallet/execute', requireWalletSigOrWorkerSecret(), async (r
 })
 
 // POST /api/echo/:wallet/parse-rule — parse only, don't save (for preview)
-app.post('/api/echo/:wallet/parse-rule', requireWalletSig(), async (req, res) => {
+app.post('/api/echo/:wallet/parse-rule', requireWalletSigOrZkLogin(), async (req, res) => {
   try {
     const { raw } = req.body as { raw: string }
     if (!raw?.trim()) { res.status(400).json({ ok: false, error: 'Rule text required' }); return }
