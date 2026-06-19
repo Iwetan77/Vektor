@@ -434,11 +434,15 @@ function SessionKeyPanel({
 
 interface EchoPageProps {
   wsAlerts: EchoWsMessage[]
+  /** Effective address from the parent — zkLogin session or adapter wallet. */
+  address?: string | null
 }
 
-export default function EchoPage({ wsAlerts }: EchoPageProps) {
+export default function EchoPage({ wsAlerts, address }: EchoPageProps) {
   const account = useCurrentAccount()
-  const wallet  = account?.address ?? null
+  // Prefer the parent-supplied effective address (covers zkLogin), fall back to
+  // the dapp-kit adapter wallet for Slush users.
+  const wallet  = address ?? account?.address ?? null
   const { signedFetch } = useAuthFetch()
 
   const [data,       setData]       = useState<EchoUserData | null>(null)
@@ -478,7 +482,7 @@ export default function EchoPage({ wsAlerts }: EchoPageProps) {
   if (!wallet) {
     return (
       <div className="flex-1 flex items-center justify-center">
-        <p className="text-slate-500 text-sm">Connect your wallet to use Echo.</p>
+        <p className="text-slate-500 text-sm">Sign in with Google to use Echo.</p>
       </div>
     )
   }

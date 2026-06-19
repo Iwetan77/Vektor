@@ -1978,7 +1978,7 @@ export default function App() {
 
         {/* ── Echo page ─────────────────────────────────────────────── */}
         {currentPage === 'echo' && (
-          <EchoPage wsAlerts={echoAlerts} />
+          <EchoPage wsAlerts={echoAlerts} address={effectiveAddress} />
         )}
 
         {/* ── Chat area (hidden when on Echo page) ────────────────── */}
