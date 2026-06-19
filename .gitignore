@@ -3,6 +3,7 @@ dist/
 dist-ui/
 app/
 contracts/vektorlog/build/
+echo-contracts/build/
 .env*
 !.env.example
 *.key
@@ -13,3 +14,5 @@ Thumbs.db
 coverage/
 *.tsbuildinfo
 data/
+.claude/
+.start.sh

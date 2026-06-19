@@ -68,6 +68,41 @@ function saveRegistry(r: Registry): void {
   fs.writeFileSync(REGISTRY_FILE, JSON.stringify(r, null, 2))
 }
 
+/* ─── Local data cache (source of truth) ─────────────────────────────────── */
+// Walrus mainnet writes fund storage from SUI_PRIVATE_KEY and can fail (no WAL
+// balance, node flakiness, slow certification). We must never lose a user's
+// contact / echo-rule edit to a storage hiccup, so the authoritative copy is a
+// local JSON file written synchronously; Walrus is a best-effort durable backup.
+// Maps walletAddress → { dataKey → JSON value }.
+
+const DATA_FILE = path.resolve(process.cwd(), 'data/walrus-data.json')
+type DataStore = Record<string, Record<string, unknown>>
+
+function loadDataStore(): DataStore {
+  try {
+    if (!fs.existsSync(DATA_FILE)) return {}
+    return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) as DataStore
+  } catch {
+    return {}
+  }
+}
+
+function saveDataStore(s: DataStore): void {
+  fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true })
+  fs.writeFileSync(DATA_FILE, JSON.stringify(s))
+}
+
+function localGet(userAddress: string, key: string): unknown | undefined {
+  return loadDataStore()[userAddress]?.[key]
+}
+
+function localPut(userAddress: string, key: string, data: unknown): void {
+  const store = loadDataStore()
+  store[userAddress]    ??= {}
+  store[userAddress][key] = data
+  saveDataStore(store)
+}
+
 /* ─── Public API ──────────────────────────────────────────────────────────── */
 
 /**
@@ -79,9 +114,15 @@ export async function writeUserData(
   key: string,
   data: unknown,
 ): Promise<string> {
+  // 1. Authoritative local write — synchronous and reliable. This is what
+  //    every subsequent read returns, so the user's edit is never lost even if
+  //    Walrus is unreachable or the funding wallet has no WAL.
+  localPut(userAddress, key, data)
+
+  // 2. Best-effort durable backup to Walrus. Failures are logged, not thrown —
+  //    the data is already safe locally.
   const blob = new TextEncoder().encode(JSON.stringify(data))
   let lastError: unknown
-
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await new Promise(r => setTimeout(r, 1_000 * attempt))
     try {
@@ -103,7 +144,8 @@ export async function writeUserData(
       lastError = err
     }
   }
-  throw new Error(`Walrus write failed after 3 attempts: ${String(lastError)}`)
+  console.warn(`[walrus] backup write failed for ${key} (data saved locally): ${String(lastError).slice(0, 200)}`)
+  return `local-${Date.now()}`
 }
 
 /**
@@ -114,12 +156,24 @@ export async function readUserData(
   userAddress: string,
   key: string,
 ): Promise<unknown | null> {
+  // 1. Local cache is authoritative and fast.
+  const local = localGet(userAddress, key)
+  if (local !== undefined) return local
+
+  // 2. Fall back to Walrus (e.g. fresh server whose local cache was wiped but
+  //    a durable backup exists). Hydrate the local cache on success.
   const registry = loadRegistry()
   const blobId   = registry[userAddress]?.[key]
   if (!blobId) return null
 
-  const bytes = await getWalrus().readBlob({ blobId })
-  return JSON.parse(new TextDecoder().decode(bytes))
+  try {
+    const bytes = await getWalrus().readBlob({ blobId })
+    const data  = JSON.parse(new TextDecoder().decode(bytes))
+    localPut(userAddress, key, data)
+    return data
+  } catch {
+    return null
+  }
 }
 
 /**

@@ -135,6 +135,62 @@ function toBaseUnits(amount: number, token: string): bigint {
   return BigInt(Math.round(amount * (TOKEN_DECIMALS[token.toUpperCase()] ?? 1e9)))
 }
 
+/**
+ * Add one or more non-SUI token transfers to a transaction by explicitly
+ * selecting the sender's coin objects on-chain.
+ *
+ * We CANNOT use `coinWithBalance` here: it produces an unresolved intent that
+ * `tx.serialize()` refuses to encode ("Unknown transaction $Intent,$kind") and
+ * `tx.toJSON()` will only resolve with a client. Since this PTB is serialized
+ * and shipped to the browser to be signed (zkLogin / wallet), we resolve coins
+ * up front into concrete object references so the result serializes cleanly.
+ *
+ * Mirrors the coin-selection pattern proven in the /onboard claim handler.
+ */
+async function addTokenTransfers(
+  tx: any,
+  coinType: string,
+  symbol: string,
+  owner: string,
+  transfers: { amountBase: bigint; recipient: string }[],
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const network = (process.env.SUI_NETWORK ?? 'mainnet') as 'mainnet' | 'testnet' | 'devnet'
+  const { SuiJsonRpcClient, getJsonRpcFullnodeUrl } = await import('@mysten/sui/jsonRpc')
+  const client = new SuiJsonRpcClient({ url: getJsonRpcFullnodeUrl(network), network })
+
+  // Page through all of the owner's coins of this type.
+  const coins: { coinObjectId: string; balance: string }[] = []
+  let cursor: string | null | undefined = undefined
+  do {
+    const page = await client.getCoins({ owner, coinType, cursor: cursor ?? null, limit: 50 })
+    coins.push(...page.data)
+    cursor = page.hasNextPage ? page.nextCursor : null
+  } while (cursor)
+
+  if (coins.length === 0) {
+    return { ok: false, error: `You don't hold any ${symbol}.` }
+  }
+  const total  = coins.reduce((a, c) => a + BigInt(c.balance), 0n)
+  const needed = transfers.reduce((a, t) => a + t.amountBase, 0n)
+  if (total < needed) {
+    const dec  = TOKEN_DECIMALS[symbol] ?? 1e9
+    const have = (Number(total)  / dec).toFixed(dec >= 1e9 ? 4 : 6)
+    const need = (Number(needed) / dec).toFixed(dec >= 1e9 ? 4 : 6)
+    return { ok: false, error: `Insufficient ${symbol} balance. You have ${have} ${symbol} but this needs ${need} ${symbol}.` }
+  }
+
+  // Merge everything into the first coin, then split exact amounts off it.
+  const primary = tx.object(coins[0].coinObjectId)
+  if (coins.length > 1) {
+    tx.mergeCoins(primary, coins.slice(1).map(c => tx.object(c.coinObjectId)))
+  }
+  for (const t of transfers) {
+    const [out] = tx.splitCoins(primary, [tx.pure.u64(t.amountBase)])
+    tx.transferObjects([out], t.recipient)
+  }
+  return { ok: true }
+}
+
 function serializeQuote(quote: any, from: string, to: string) {
   const inDec  = TOKEN_DECIMALS[from.toUpperCase()] ?? 1e9
   const outDec = TOKEN_DECIMALS[to.toUpperCase()]   ?? 1e9
@@ -586,6 +642,23 @@ app.post('/api/intent', async (req, res) => {
         if (rev) displayName = rev
       }
 
+      // ── Balance check — reject before showing a confirmation we can't honor ─
+      if (sender !== SIM_ADDR) {
+        const actual = await getTokenBalance(sender, token).catch(() => Infinity)
+        if (actual < amount) {
+          markFailed()
+          const have   = actual.toFixed(TOKEN_DECIMALS[token] >= 1e9 ? 4 : 6)
+          const need   = amount.toFixed(TOKEN_DECIMALS[token] >= 1e9 ? 4 : 6)
+          const errEn  = `Insufficient ${token} balance. You have ${have} ${token} but want to send ${need} ${token}.`
+          const errMsg = lang === 'en' ? errEn : await complete({
+            system: 'You are Vektor. Translate this error message exactly, keeping token symbols and numbers unchanged.',
+            prompt: errEn, maxTokens: 80, lang,
+          }).catch(() => errEn)
+          res.json({ ok: false, error: errMsg, language: lang })
+          return
+        }
+      }
+
       const target    = displayName
         ? `${displayName} (${recipient.slice(0, 8)}…${recipient.slice(-4)})`
         : `${recipient.slice(0, 8)}…${recipient.slice(-4)}`
@@ -640,6 +713,23 @@ app.post('/api/intent', async (req, res) => {
         }).catch(() => askEn)
         res.json({ ok: true, intent_type: 'general', parsedIntent: parsed, language: lang, message: askMsg, actionLabel: '· CONTACT · NOT FOUND' })
         return
+      }
+
+      // ── Balance check — same as the send path ────────────────────────
+      if (sender !== SIM_ADDR) {
+        const actual = await getTokenBalance(sender, token).catch(() => Infinity)
+        if (actual < amount) {
+          markFailed()
+          const have   = actual.toFixed(TOKEN_DECIMALS[token] >= 1e9 ? 4 : 6)
+          const need   = amount.toFixed(TOKEN_DECIMALS[token] >= 1e9 ? 4 : 6)
+          const errEn  = `Insufficient ${token} balance. You have ${have} ${token} but want to pay ${need} ${token}.`
+          const errMsg = lang === 'en' ? errEn : await complete({
+            system: 'You are Vektor. Translate this error message exactly, keeping token symbols and numbers unchanged.',
+            prompt: errEn, maxTokens: 80, lang,
+          }).catch(() => errEn)
+          res.json({ ok: false, error: errMsg, language: lang })
+          return
+        }
       }
 
       const msgEn = `Ready to send ${amount} ${token} to ${recipientName} (${resolvedAddress.slice(0, 8)}…${resolvedAddress.slice(-4)}).`
@@ -1547,11 +1637,21 @@ app.post('/api/execute-scheduled/:id', requireWalletSigOrZkLogin({
     const amount         = scheduled.amount
     const lang           = sender !== SIM_ADDR ? getPreferredLanguage(sender) : 'en'
 
-    // ── Dispatch on the original intent type ────────────────────────────
-    // Earlier this handler assumed every scheduled item was a swap, so
-    // "send 0.001 SUI to adeniyi.sui in 1 minute" got executed as a
-    // SUI→USDC swap with a USDC fallback. Branch on intent_type instead.
-    const isSend = scheduledType === 'send' || scheduledType === 'contact_payment'
+    // ── Dispatch: send vs swap ──────────────────────────────────────────
+    // "send 0.001 SUI to adeniyi.sui in 1 minute" is parsed as
+    // intent_type:"schedule" (the wrapper) — NOT "send" — so we can't branch
+    // on intent_type. The real signal is the recipient: a scheduled transfer
+    // carries a recipient and no swap target, whereas a scheduled swap carries
+    // a targetToken/output_goal and no recipient. Detect a send by recipient
+    // presence (and an explicit send/contact_payment type as a belt-and-braces
+    // fallback for any record that did store the inner type).
+    const recipient = scheduled.recipient ?? scheduled.intent?.recipient ?? null
+    const swapTarget = (scheduled.targetToken ?? scheduled.intent?.output_goal ?? '').toUpperCase()
+    const hasSwapTarget = !!swapTarget && swapTarget !== fromToken
+    const isSend =
+      scheduledType === 'send' ||
+      scheduledType === 'contact_payment' ||
+      (!!recipient && !hasSwapTarget)
 
     // Balance check — same shape for send and swap (need amount of fromToken).
     if (sender !== SIM_ADDR) {
@@ -1568,7 +1668,7 @@ app.post('/api/execute-scheduled/:id', requireWalletSigOrZkLogin({
 
     // ── SEND path: resolve recipient (raw 0x or SuiNS), return send-shape ──
     if (isSend) {
-      const rawRecipient = scheduled.recipient ?? scheduled.intent?.recipient ?? ''
+      const rawRecipient = recipient ?? ''
       if (!rawRecipient) {
         res.json({ ok: false, error: 'Scheduled send has no recipient.', language: lang }); return
       }
@@ -1840,13 +1940,12 @@ app.post('/api/batch-payment-ptb', async (req, res) => {
       )
       members.forEach((m, i) => tx.transferObjects([splits[i]], m.address))
     } else {
-      // For other tokens: coinWithBalance per recipient
-      // Transaction builder handles coin selection/merging automatically
-      const { coinWithBalance } = await import('@mysten/sui/transactions')
-      for (const member of members) {
-        const coin = coinWithBalance({ type: coinType, balance: amountMist }) as any
-        tx.transferObjects([coin], member.address)
-      }
+      // Non-SUI: resolve concrete coin objects so the PTB serializes for the browser.
+      const r = await addTokenTransfers(
+        tx, coinType, tokenUpper, senderAddress,
+        members.map(m => ({ amountBase: amountMist, recipient: m.address })),
+      )
+      if (!r.ok) { res.status(400).json({ ok: false, error: r.error }); return }
     }
 
     const ptbJson = tx.serialize()
@@ -1885,7 +1984,7 @@ app.post('/api/send-ptb', async (req, res) => {
       }
     }
 
-    const { Transaction, coinWithBalance } = await import('@mysten/sui/transactions')
+    const { Transaction } = await import('@mysten/sui/transactions')
     const tx = new Transaction()
     tx.setSender(senderAddress)
 
@@ -1898,8 +1997,9 @@ app.post('/api/send-ptb', async (req, res) => {
       const [splitCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(amountBase)])
       tx.transferObjects([splitCoin], recipient)
     } else {
-      const coin = coinWithBalance({ type: coinType, balance: amountBase }) as any
-      tx.transferObjects([coin], recipient)
+      // Non-SUI: resolve concrete coin objects so the PTB serializes for the browser.
+      const r = await addTokenTransfers(tx, coinType, tokenUpper, senderAddress, [{ amountBase, recipient }])
+      if (!r.ok) { res.status(400).json({ ok: false, error: r.error }); return }
     }
 
     const ptbJson = tx.serialize()
