@@ -301,7 +301,7 @@ function PortfolioCard({ portfolio }: { portfolio: any }) {
   )
 }
 
-function NaviCard({ payload, intentType, onSign }: { payload: any; intentType: string; onSign?: () => void }) {
+function NaviCard({ payload, intentType, onSign, onCancel }: { payload: any; intentType: string; onSign?: () => void; onCancel?: () => void }) {
   const isLend   = intentType === 'lend'
   const isBorrow = intentType === 'borrow'
   const isRepay  = intentType === 'repay'
@@ -343,12 +343,22 @@ function NaviCard({ payload, intentType, onSign }: { payload: any; intentType: s
           : 'Transaction will be built on-chain before signing.'}
       </p>
       {onSign && (
-        <button
-          onClick={onSign}
-          className="w-full py-2 rounded-lg bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/30 hover:border-purple-500/60 text-purple-300 text-xs font-semibold transition-colors"
-        >
-          Sign &amp; Execute on NAVI →
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={onSign}
+            className="flex-1 py-2 rounded-lg bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/30 hover:border-purple-500/60 text-purple-300 text-xs font-semibold transition-colors"
+          >
+            Sign &amp; Execute on NAVI →
+          </button>
+          {onCancel && (
+            <button
+              onClick={onCancel}
+              className="px-4 py-2 rounded-lg bg-white/[0.02] hover:bg-red-500/10 border border-white/10 hover:border-red-500/40 text-slate-400 hover:text-red-300 text-xs font-semibold transition-colors"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       )}
     </div>
   )
@@ -490,7 +500,7 @@ function GeneralCard({ message }: { message: string }) {
   )
 }
 
-function BatchPaymentCard({ payload, onSign }: { payload: any; onSign?: () => void }) {
+function BatchPaymentCard({ payload, onSign, onCancel }: { payload: any; onSign?: () => void; onCancel?: () => void }) {
   const bd = payload?.batchData
   if (!bd) return null
   const isSplit = payload?.intent_type === 'split_payment'
@@ -527,12 +537,22 @@ function BatchPaymentCard({ payload, onSign }: { payload: any; onSign?: () => vo
         <span className="text-white/40">{bd.token}</span>
       </div>
       {onSign && (
-        <button
-          onClick={onSign}
-          className="w-full py-2 rounded-lg bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/30 hover:border-purple-500/60 text-purple-300 text-xs font-semibold transition-colors"
-        >
-          Sign &amp; Execute Batch →
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={onSign}
+            className="flex-1 py-2 rounded-lg bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/30 hover:border-purple-500/60 text-purple-300 text-xs font-semibold transition-colors"
+          >
+            Sign &amp; Execute Batch →
+          </button>
+          {onCancel && (
+            <button
+              onClick={onCancel}
+              className="px-4 py-2 rounded-lg bg-white/[0.02] hover:bg-red-500/10 border border-white/10 hover:border-red-500/40 text-slate-400 hover:text-red-300 text-xs font-semibold transition-colors"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       )}
     </div>
   )
@@ -769,7 +789,7 @@ function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, on
           )
           return (
             <div className="space-y-4">
-              <NaviCard payload={msg.payload} intentType={it} onSign={onSign} />
+              <NaviCard payload={msg.payload} intentType={it} onSign={onSign} onCancel={onReset} />
               {msg.text && <GeneralCard message={msg.text} />}
             </div>
           )
@@ -811,7 +831,7 @@ function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, on
           )
           return (
             <div className="space-y-4">
-              <BatchPaymentCard payload={msg.payload} onSign={onBatchSign} />
+              <BatchPaymentCard payload={msg.payload} onSign={onBatchSign} onCancel={onReset} />
               {msg.text && <GeneralCard message={msg.text} />}
             </div>
           )
