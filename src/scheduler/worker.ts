@@ -1,8 +1,9 @@
 /**
  * Scheduler worker — checks every minute for due scheduled intents.
- * When a DCA or one-time swap fires:
- *   • If SUI_PRIVATE_KEY is set → auto-executes server-side via Routex
- *   • Otherwise → queues an actionable alert for the user
+ * When a DCA or one-time swap fires, execution is attempted in this order:
+ *   1. A valid Echo session key → autonomous, cap-enforced on-chain (offline-friendly)
+ *   2. SUI_PRIVATE_KEY (if set)  → server-side execute via Routex
+ *   3. Neither                   → queue a one-tap Execute alert for the user
  */
 
 import cron      from 'node-cron'
@@ -52,6 +53,68 @@ function nextRunAfter(intent: ScheduledIntent): string {
   return ''
 }
 
+/**
+ * Preference (1): execute a due swap autonomously through the user's Echo
+ * session key — the delegation mechanism that lets Vektor act while the user is
+ * offline, WITHOUT any raw SUI_PRIVATE_KEY.
+ *
+ * We do NOT re-implement signing here. We route through the existing
+ * /api/echo/:wallet/execute endpoint (worker-secret auth) so the on-chain
+ * session_auth::record_execution cap check runs atomically with the swap. The
+ * spend cap is therefore enforced on-chain, never bypassed: if the swap would
+ * exceed it the transaction aborts, the endpoint returns an error, and we
+ * return false so the caller falls through to the next tier (one-tap alert).
+ *
+ * Returns true only when the swap actually executed (and a success alert was
+ * emitted); false means "couldn't / shouldn't — fall through".
+ */
+async function tryEchoSessionExecute(
+  item: ScheduledIntent,
+  fromToken: string,
+  toToken: string,
+  amount: number,
+  label: string,
+): Promise<boolean> {
+  // Worker-secret auth must be available to self-call the execute endpoint.
+  const workerSecret = process.env.ECHO_WORKER_SECRET
+  if (!workerSecret) return false
+
+  try {
+    const [{ loadSessionKeypair }, { readEchoData }] = await Promise.all([
+      import('../echo/session.js'),
+      import('../echo/walrus.js'),
+    ])
+
+    // Gate strictly on: a usable session key exists AND its metadata is present
+    // AND it hasn't expired. (The amount-vs-cap check is enforced on-chain by
+    // the endpoint's record_execution call.)
+    const keypair = await loadSessionKeypair(item.wallet)
+    if (!keypair) return false
+    const meta = (await readEchoData(item.wallet)).sessionKeyMetadata
+    if (!meta || meta.expiresAt <= Date.now()) return false
+
+    const port = process.env.PORT ?? '3001'
+    const resp = await fetch(`http://127.0.0.1:${port}/api/echo/${item.wallet}/execute`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'x-echo-worker-secret': workerSecret },
+      body:    JSON.stringify({ from: fromToken, to: toToken, amount }),
+    })
+    const json = await resp.json().catch(() => ({} as any))
+    if (!resp.ok || !json?.digest) return false   // cap exceeded / quote failed / etc → fall through
+
+    const digest = String(json.digest)
+    addAlert(item.wallet, {
+      type:     'scheduled',
+      message:  `✓ ${label} executed via Echo session key: ${amount} ${fromToken} → ${toToken}. TX: ${digest.slice(0, 12)}…${digest.slice(-6)}`,
+      severity: 'info',
+    })
+    schedulerEvents.emit('executed', { item, digest })
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** Auto-execute a scheduled swap server-side using the stored keypair */
 async function tryAutoExecute(item: ScheduledIntent): Promise<void> {
   const privateKey = process.env.SUI_PRIVATE_KEY
@@ -71,9 +134,13 @@ async function tryAutoExecute(item: ScheduledIntent): Promise<void> {
     return
   }
 
+  // Preference (1): autonomous execution via the user's Echo session key.
+  // Falls through (returns false) if no key / expired / over cap / not configured.
+  if (await tryEchoSessionExecute(item, fromToken, toToken, amount, label)) return
+
   if (!privateKey) {
-    // No server key — send an actionable alert carrying the schedule ID so the UI
-    // can call /api/execute-scheduled/:id instead of re-parsing raw text.
+    // Preference (3): no server key and no session key — send an actionable alert
+    // carrying the schedule ID so the UI can call /api/execute-scheduled/:id.
     addAlert(item.wallet, {
       type:     'scheduled',
       message:  `⏰ ${label} due: ${amount} ${fromToken} → ${toToken}. Tap Execute to review & sign.`,
