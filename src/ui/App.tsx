@@ -7,6 +7,8 @@ import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from '@mysten/sui/jsonRpc'
 import { toBase64 } from '@mysten/sui/utils'
 import { PTBPreview }       from './PTBPreview.js'
 import { SwapQuoteCard }    from './cards/SwapQuoteCard.js'
+import { TransactionReceiptCard } from './cards/TransactionReceiptCard.js'
+import { BundleReceiptCard }      from './cards/BundleReceiptCard.js'
 import { GuardianReport }   from './GuardianReport.js'
 import { ConfirmationGate } from './ConfirmationGate.js'
 import { Sidebar }          from './Sidebar.js'
@@ -46,6 +48,7 @@ interface ChatMessage {
   payload?:        any
   executionDigest?: string
   executionError?:  string
+  executedAt?:      number   // epoch ms when execution succeeded — for receipt timestamp
   language?:        string   // ISO 639-1 code of detected language
   recordId?:        string   // History record id — used to report final exec status
 }
@@ -697,27 +700,19 @@ function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, on
         if (msg.guardData && msg.phase === 'confirmed') {
           const ex = execT(msg.language)
 
-          // Execution succeeded — show digest + suiscan link
-          if (msg.executionDigest) return (
-            <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-6 py-5 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="text-emerald-400 text-lg">✓</span>
-                <span className="text-white font-semibold text-sm">{ex.executed}</span>
-              </div>
-              <div className="flex items-center gap-2 font-mono text-xs text-slate-400">
-                <span>{ex.digest}</span>
-                <span className="text-slate-300">{msg.executionDigest.slice(0, 12)}…{msg.executionDigest.slice(-6)}</span>
-                <a
-                  href={`https://suiscan.xyz/mainnet/tx/${msg.executionDigest}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-purple-400 hover:text-purple-300 transition-colors"
-                >
-                  ↗ Suiscan
-                </a>
-              </div>
-            </div>
-          )
+          // Execution succeeded — rich receipt card
+          if (msg.executionDigest) {
+            const q = msg.guardData.quote
+            return (
+              <TransactionReceiptCard
+                digest={msg.executionDigest}
+                title={ex.executed}
+                fromLabel={q?.amountInFormatted  ? `${q.amountInFormatted} ${q.fromSymbol ?? ''}`.trim()  : undefined}
+                toLabel={q?.amountOutFormatted ? `${q.amountOutFormatted} ${q.toSymbol ?? ''}`.trim() : undefined}
+                executedAt={msg.executedAt}
+              />
+            )
+          }
           // Wallet rejected / execution error
           if (msg.executionError) return (
             <div className="rounded-xl border border-red-500/25 bg-red-500/5 px-6 py-5 space-y-2">
@@ -763,19 +758,20 @@ function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, on
           </div>
         )
         if (it === 'lend' || it === 'borrow' || it === 'repay') {
-          if (msg.executionDigest) return (
-            <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-6 py-5 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="text-emerald-400 text-lg">✓</span>
-                <span className="text-white font-semibold text-sm capitalize">{it} executed on NAVI</span>
-              </div>
-              <div className="flex items-center gap-2 font-mono text-xs text-slate-400">
-                <span>Digest:</span>
-                <span className="text-slate-300">{msg.executionDigest.slice(0, 12)}…{msg.executionDigest.slice(-6)}</span>
-                <a href={`https://suiscan.xyz/mainnet/tx/${msg.executionDigest}`} target="_blank" rel="noreferrer" className="text-purple-400 hover:text-purple-300 transition-colors">↗ Suiscan</a>
-              </div>
-            </div>
-          )
+          if (msg.executionDigest) {
+            const pi = msg.payload?.parsedIntent
+            const amt = pi?.input_amount
+            const tok = (pi?.input_asset ?? '').toUpperCase()
+            return (
+              <TransactionReceiptCard
+                digest={msg.executionDigest}
+                title={`${it.charAt(0).toUpperCase()}${it.slice(1)} executed on NAVI`}
+                fromLabel={amt ? `${amt} ${tok}`.trim() : undefined}
+                toLabel={amt ? 'NAVI' : undefined}
+                executedAt={msg.executedAt}
+              />
+            )
+          }
           return (
             <div className="space-y-4">
               <NaviCard payload={msg.payload} intentType={it} onSign={onSign} onCancel={onReset} />
@@ -797,21 +793,18 @@ function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, on
 
         if (it === 'batch_payment' || it === 'split_payment') {
           // After execution
-          if (msg.executionDigest) return (
-            <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-6 py-5 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="text-emerald-400 text-lg">✓</span>
-                <span className="text-white font-semibold text-sm">
-                  {it === 'split_payment' ? 'Split payment' : 'Batch payment'} executed
-                </span>
-              </div>
-              <div className="flex items-center gap-2 font-mono text-xs text-slate-400">
-                <span>Digest:</span>
-                <span className="text-slate-300">{msg.executionDigest.slice(0, 12)}…{msg.executionDigest.slice(-6)}</span>
-                <a href={`https://suiscan.xyz/mainnet/tx/${msg.executionDigest}`} target="_blank" rel="noreferrer" className="text-purple-400 hover:text-purple-300 transition-colors">↗ Suiscan</a>
-              </div>
-            </div>
-          )
+          if (msg.executionDigest) {
+            const bd = msg.payload?.batchData
+            return (
+              <BundleReceiptCard
+                digest={msg.executionDigest}
+                token={bd?.token ?? ''}
+                amountPerPerson={bd?.amountPerPerson ?? 0}
+                recipients={bd?.members ?? []}
+                kind={it === 'split_payment' ? 'split' : 'batch'}
+              />
+            )
+          }
           if (msg.executionError) return (
             <div className="rounded-xl border border-red-500/25 bg-red-500/5 px-6 py-5 space-y-2">
               <div className="flex items-center gap-2"><span className="text-red-400">✕</span><span className="text-white font-semibold text-sm">Batch payment failed</span></div>
@@ -833,19 +826,19 @@ function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, on
 
         if (it === 'send') {
           const p = msg.payload?.ptbParams as { token?: string; amount?: number; recipient?: string; contactName?: string } | undefined
-          if (msg.executionDigest) return (
-            <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-6 py-5 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="text-emerald-400 text-lg">✓</span>
-                <span className="text-white font-semibold text-sm">Sent {p?.amount} {p?.token}</span>
-              </div>
-              <div className="flex items-center gap-2 font-mono text-xs text-slate-400">
-                <span>Digest:</span>
-                <span className="text-slate-300">{msg.executionDigest.slice(0, 12)}…{msg.executionDigest.slice(-6)}</span>
-                <a href={`https://suiscan.xyz/mainnet/tx/${msg.executionDigest}`} target="_blank" rel="noreferrer" className="text-purple-400 hover:text-purple-300 transition-colors">↗ Suiscan</a>
-              </div>
-            </div>
-          )
+          if (msg.executionDigest) {
+            const dest = p?.contactName
+              ?? (p?.recipient ? `${p.recipient.slice(0, 8)}…${p.recipient.slice(-4)}` : undefined)
+            return (
+              <TransactionReceiptCard
+                digest={msg.executionDigest}
+                title={`Sent ${p?.amount ?? ''} ${p?.token ?? ''}`.trim()}
+                fromLabel={p?.amount ? `${p.amount} ${p.token ?? ''}`.trim() : undefined}
+                toLabel={dest}
+                executedAt={msg.executedAt}
+              />
+            )
+          }
           if (msg.executionError) return (
             <div className="rounded-xl border border-red-500/25 bg-red-500/5 px-6 py-5 space-y-2">
               <div className="flex items-center gap-2"><span className="text-red-400">✕</span><span className="text-white font-semibold text-sm">Transfer failed</span></div>
@@ -1581,7 +1574,7 @@ export default function App() {
 
       const digest = await zkLogin.signAndExecuteBytes(ptbB64)
       setMessages(prev => prev.map(m =>
-        m.id === msgId ? { ...m, actionLabel: '· EXECUTED · NAVI', executionDigest: digest } : m
+        m.id === msgId ? { ...m, actionLabel: '· EXECUTED · NAVI', executionDigest: digest, executedAt: Date.now() } : m
       ))
       void reportIntentStatus(msgId, 'success')
       setTimeout(refreshPortfolio, 3000)
@@ -1627,7 +1620,7 @@ export default function App() {
       const txBytesB64 = await buildBytesFromPtbJson(json.ptbJson)
       const digest     = await zkLogin.signAndExecuteBytes(txBytesB64)
       setMessages(prev => prev.map(m =>
-        m.id === msgId ? { ...m, actionLabel: '· EXECUTED · BATCH', executionDigest: digest } : m
+        m.id === msgId ? { ...m, actionLabel: '· EXECUTED · BATCH', executionDigest: digest, executedAt: Date.now() } : m
       ))
       void reportIntentStatus(msgId, 'success')
       setTimeout(refreshPortfolio, 3000)
@@ -1676,6 +1669,7 @@ export default function App() {
           ...m,
           actionLabel:     `· SENT · ${p.amount} ${p.token}`,
           executionDigest: digest,
+          executedAt:      Date.now(),
         } : m
       ))
       void reportIntentStatus(msgId, 'success')
@@ -1765,6 +1759,7 @@ export default function App() {
           loading:         false,
           actionLabel:     '· EXECUTED · MAINNET',
           executionDigest: digest,
+          executedAt:      Date.now(),
         } : m,
       ))
       void reportIntentStatus(msgId, 'success')
