@@ -6,6 +6,7 @@ import { Transaction } from '@mysten/sui/transactions'
 import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from '@mysten/sui/jsonRpc'
 import { toBase64 } from '@mysten/sui/utils'
 import { PTBPreview }       from './PTBPreview.js'
+import { SwapQuoteCard }    from './cards/SwapQuoteCard.js'
 import { GuardianReport }   from './GuardianReport.js'
 import { ConfirmationGate } from './ConfirmationGate.js'
 import { Sidebar }          from './Sidebar.js'
@@ -680,7 +681,9 @@ function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, on
         // Swap / Guardian flow
         if (msg.guardData && msg.phase !== 'confirmed') return (
           <div className="space-y-4">
-            <PTBPreview parsedIntent={msg.guardData.parsedIntent} quote={msg.guardData.quote} originalText={msg.originalText ?? ''} />
+            {msg.guardData.quote?.amountOutFormatted !== undefined
+              ? <SwapQuoteCard quote={msg.guardData.quote} parsedIntent={msg.guardData.parsedIntent} />
+              : <PTBPreview parsedIntent={msg.guardData.parsedIntent} quote={msg.guardData.quote} originalText={msg.originalText ?? ''} />}
             <GuardianReport report={msg.guardData.report} rewriting={msg.phase === 'rewriting'} wasRewritten={msg.phase === 'rewritten'} diff={msg.guardData.diff} onFix={onFix} />
             {msg.guardData.rewriteNote && (
               <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-4 py-3 text-sm text-yellow-300/80">
