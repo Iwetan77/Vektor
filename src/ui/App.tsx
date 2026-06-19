@@ -847,12 +847,20 @@ function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, on
             <div className="space-y-3">
               {msg.text && <GeneralCard message={msg.text} />}
               {p?.recipient && (
-                <button
-                  onClick={onSendSign}
-                  className="w-full py-2 rounded-lg bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/30 hover:border-purple-500/60 text-purple-300 text-xs font-semibold transition-colors"
-                >
-                  Confirm &amp; Send {p.amount} {p.token} →
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={onSendSign}
+                    className="flex-1 py-2 rounded-lg bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/30 hover:border-purple-500/60 text-purple-300 text-xs font-semibold transition-colors"
+                  >
+                    Confirm &amp; Send {p.amount} {p.token} →
+                  </button>
+                  <button
+                    onClick={onReset}
+                    className="px-4 py-2 rounded-lg bg-white/[0.02] hover:bg-red-500/10 border border-white/10 hover:border-red-500/40 text-slate-400 hover:text-red-300 text-xs font-semibold transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
               )}
             </div>
           )
