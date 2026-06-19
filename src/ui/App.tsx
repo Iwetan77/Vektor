@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { ConnectModal, useCurrentAccount, useDisconnectWallet, useSuiClientQuery, useSignAndExecuteTransaction } from '@mysten/dapp-kit'
 import { useAuthFetch } from './lib/authFetch.js'
+import { isNeedResign } from './useZkLogin.js'
 import { Transaction } from '@mysten/sui/transactions'
 import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from '@mysten/sui/jsonRpc'
 import { toBase64 } from '@mysten/sui/utils'
@@ -1499,8 +1500,9 @@ export default function App() {
       setTimeout(refreshPortfolio, 3000)
     } catch (err: any) {
       const errMsg = err instanceof Error ? err.message : String(err)
+      const label  = isNeedResign(err) ? '· RE-SIGNING IN…' : '· FAILED'
       setMessages(prev => prev.map(m =>
-        m.id === msgId ? { ...m, actionLabel: '· FAILED', text: `Transaction failed: ${errMsg}` } : m
+        m.id === msgId ? { ...m, actionLabel: label, text: isNeedResign(err) ? errMsg : `Transaction failed: ${errMsg}` } : m
       ))
     }
   }
@@ -1542,8 +1544,9 @@ export default function App() {
       setTimeout(refreshPortfolio, 3000)
     } catch (err: any) {
       const errMsg = err instanceof Error ? err.message : String(err)
+      const label  = isNeedResign(err) ? '· RE-SIGNING IN…' : '· FAILED'
       setMessages(prev => prev.map(m =>
-        m.id === msgId ? { ...m, actionLabel: '· FAILED', executionError: errMsg } : m
+        m.id === msgId ? { ...m, actionLabel: label, executionError: errMsg } : m
       ))
     }
   }
@@ -1588,8 +1591,9 @@ export default function App() {
       setTimeout(refreshPortfolio, 3000)
     } catch (err: any) {
       const errMsg = err instanceof Error ? err.message : String(err)
+      const label  = isNeedResign(err) ? '· RE-SIGNING IN…' : '· FAILED'
       setMessages(prev => prev.map(m =>
-        m.id === msgId ? { ...m, actionLabel: '· FAILED', executionError: errMsg } : m
+        m.id === msgId ? { ...m, actionLabel: label, executionError: errMsg } : m
       ))
     }
   }
@@ -1673,12 +1677,13 @@ export default function App() {
       ))
       setTimeout(refreshPortfolio, 3000)
     } catch (err: any) {
+      const label = isNeedResign(err) ? '· RE-SIGNING IN…' : '· ERROR'
       setMessages(prev => prev.map(m =>
         m.id === msgId ? {
           ...m,
           loading:     false,
           phase:       'review' as const,
-          actionLabel: '· ERROR',
+          actionLabel: label,
           text:        err.message ?? 'Execution failed.',
         } : m,
       ))
