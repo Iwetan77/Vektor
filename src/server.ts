@@ -73,7 +73,9 @@ import { registerZkLoginRoutes } from './auth/zklogin-routes.js'
 
 /* ─── VektorRegistry — local JSON counter ────────────────────────────────── */
 
-const REGISTRY_FILE = path.resolve(process.cwd(), 'data/registry.json')
+// Vercel's filesystem is read-only except /tmp, so writable data must live there.
+const DATA_DIR = process.env.VERCEL ? '/tmp/vektor-data' : path.resolve(process.cwd(), 'data')
+const REGISTRY_FILE = path.join(DATA_DIR, 'registry.json')
 
 interface Registry { total_transactions: number; total_rewrites: number; last_updated: string }
 function loadRegistry(): Registry {

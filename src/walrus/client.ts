@@ -56,7 +56,9 @@ function getSigner(): Ed25519Keypair {
 // Maps walletAddress → { dataKey → blobId }
 // Only tiny blobId strings (~60 chars) live here.  All real data is in Walrus.
 
-const REGISTRY_FILE = path.resolve(process.cwd(), 'data/walrus-registry.json')
+// Vercel's filesystem is read-only except /tmp, so writable data must live there.
+const DATA_DIR = process.env.VERCEL ? '/tmp/vektor-data' : path.resolve(process.cwd(), 'data')
+const REGISTRY_FILE = path.join(DATA_DIR, 'walrus-registry.json')
 type Registry = Record<string, Record<string, string>>
 
 function loadRegistry(): Registry {
@@ -80,7 +82,7 @@ function saveRegistry(r: Registry): void {
 // local JSON file written synchronously; Walrus is a best-effort durable backup.
 // Maps walletAddress → { dataKey → JSON value }.
 
-const DATA_FILE = path.resolve(process.cwd(), 'data/walrus-data.json')
+const DATA_FILE = path.join(DATA_DIR, 'walrus-data.json')
 type DataStore = Record<string, Record<string, unknown>>
 
 function loadDataStore(): DataStore {
