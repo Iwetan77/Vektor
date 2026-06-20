@@ -28,6 +28,9 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.55.0",
+    "@bluefin-exchange/bluefin7k-aggregator-sdk": "5.5.1",
+    "@cetusprotocol/aggregator-sdk": "1.5.5",
+    "@flowx-finance/sdk": "1.15.0",
     "@google/generative-ai": "^0.24.1",
     "@mysten/dapp-kit": "^1.0.6",
     "@mysten/sui": "^2.17.0",
