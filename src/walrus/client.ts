@@ -9,8 +9,8 @@
  * Retry policy: up to 3 attempts with exponential back-off before throwing.
  */
 
-import { WalrusClient }          from '@mysten/walrus'
-import { SuiJsonRpcClient as SuiClient, getJsonRpcFullnodeUrl as getFullnodeUrl } from '@mysten/sui/jsonRpc'
+import type { WalrusClient }     from '@mysten/walrus'
+import { SuiClient, getFullnodeUrl } from '@mysten/sui/client'
 import { Ed25519Keypair }        from '@mysten/sui/keypairs/ed25519'
 import fs   from 'fs'
 import path from 'path'
@@ -33,8 +33,13 @@ function getSuiClient(): SuiClient {
   return _suiClient
 }
 
-function getWalrus(): WalrusClient {
-  if (!_walrus) _walrus = new WalrusClient({ network: NETWORK, suiClient: getSuiClient() })
+// Lazy dynamic import so @mysten/walrus (and its WASM blob) is only loaded when
+// a contacts/Echo feature actually uses it — never on the sign-in or startup path.
+async function getWalrus(): Promise<WalrusClient> {
+  if (!_walrus) {
+    const { WalrusClient } = await import('@mysten/walrus')
+    _walrus = new WalrusClient({ network: NETWORK, suiClient: getSuiClient() })
+  }
   return _walrus
 }
 
@@ -126,7 +131,7 @@ export async function writeUserData(
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await new Promise(r => setTimeout(r, 1_000 * attempt))
     try {
-      const { blobId } = await getWalrus().writeBlob({
+      const { blobId } = await (await getWalrus()).writeBlob({
         blob,
         signer:    getSigner(),
         epochs:    EPOCHS,
@@ -167,7 +172,7 @@ export async function readUserData(
   if (!blobId) return null
 
   try {
-    const bytes = await getWalrus().readBlob({ blobId })
+    const bytes = await (await getWalrus()).readBlob({ blobId })
     const data  = JSON.parse(new TextDecoder().decode(bytes))
     localPut(userAddress, key, data)
     return data
@@ -189,7 +194,7 @@ export function getBlobId(userAddress: string, key: string): string | null {
  */
 export async function walrusHealthCheck(): Promise<boolean> {
   try {
-    await getWalrus().storageCost(32, 1)
+    await (await getWalrus()).storageCost(32, 1)
     return true
   } catch {
     return false

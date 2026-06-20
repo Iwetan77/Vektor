@@ -1,9 +1,9 @@
 {
   "version": 2,
-  "buildCommand": "npm run build:ui",
+  "buildCommand": "npm run build:api && npm run build:ui",
   "outputDirectory": "dist-ui",
   "functions": {
-    "api/index.ts": {
+    "api/index.js": {
       "maxDuration": 30
     }
   },

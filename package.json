@@ -19,6 +19,7 @@
   ],
   "scripts": {
     "build": "tsup",
+    "build:api": "tsup --config tsup.api.config.ts",
     "build:ui": "vite build",
     "dev:server": "tsx src/server.ts",
     "dev:ui": "vite",

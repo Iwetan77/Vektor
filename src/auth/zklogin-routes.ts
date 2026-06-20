@@ -68,7 +68,9 @@ function asArray(v: string | number | string[] | undefined): string[] {
 }
 
 function suiNetwork(): 'mainnet' | 'testnet' | 'devnet' {
-  const n = (process.env.SUI_NETWORK ?? 'mainnet') as 'mainnet' | 'testnet' | 'devnet'
+  // Strip BOM / stray whitespace that can sneak into env vars and break getFullnodeUrl.
+  const raw = (process.env.SUI_NETWORK ?? 'mainnet').replace(/^﻿/, '').trim()
+  const n = (raw || 'mainnet') as 'mainnet' | 'testnet' | 'devnet'
   return n
 }
 
