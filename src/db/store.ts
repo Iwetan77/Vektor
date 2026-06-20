@@ -103,23 +103,33 @@ interface StoreData {
 
 /* ─── I/O ───────────────────────────────────────────────────────────────── */
 
+// Module-level cache — survives across requests on the same warm container.
+let _cache: StoreData | null = null
+
+function empty(): StoreData {
+  return { scheduled: [], conditions: [], payments: [], positions: [], invites: [] }
+}
+
 function load(): StoreData {
+  if (_cache) return _cache
   try {
-    if (!fs.existsSync(DATA_FILE)) {
-      return { scheduled: [], conditions: [], payments: [], positions: [], invites: [] }
-    }
+    if (!fs.existsSync(DATA_FILE)) { _cache = empty(); return _cache }
     const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) as StoreData
-    // Back-fill missing keys introduced in later versions
     if (!data.invites) data.invites = []
-    return data
+    _cache = data
+    return _cache
   } catch {
-    return { scheduled: [], conditions: [], payments: [], positions: [], invites: [] }
+    _cache = empty()
+    return _cache
   }
 }
 
 function save(data: StoreData): void {
-  fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true })
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2))
+  _cache = data   // update cache synchronously
+  try {
+    fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true })
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2))
+  } catch { /* /tmp write failure is non-fatal — cache still holds the data */ }
 }
 
 /* ─── Scheduled intents ──────────────────────────────────────────────────── */

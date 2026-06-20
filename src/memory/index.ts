@@ -65,35 +65,53 @@ export interface UserMemory {
   }
 }
 
+// Module-level cache — one entry per wallet, survives across warm requests.
+const _memCache = new Map<string, UserMemory>()
+
 function memPath(wallet: string): string {
   fs.mkdirSync(MEMORY_DIR, { recursive: true })
   return path.join(MEMORY_DIR, `${wallet.toLowerCase()}.json`)
 }
 
-export function getMemory(wallet: string): UserMemory {
-  const p = memPath(wallet)
-  if (!fs.existsSync(p)) {
-    return {
-      wallet,
-      lastSeen:      new Date().toISOString(),
-      preferences:   { riskTolerance: 'medium', preferredProtocols: [], typicalAmounts: {} },
-      pendingAlerts: [],
-      intentHistory: [],
-      adviceLog:     [],
-      stats:         { totalIntents: 0, totalSwapVolume: 0, firstSeen: new Date().toISOString() },
-    }
+function freshMemory(wallet: string): UserMemory {
+  return {
+    wallet,
+    lastSeen:      new Date().toISOString(),
+    preferences:   { riskTolerance: 'medium', preferredProtocols: [], typicalAmounts: {} },
+    pendingAlerts: [],
+    intentHistory: [],
+    adviceLog:     [],
+    stats:         { totalIntents: 0, totalSwapVolume: 0, firstSeen: new Date().toISOString() },
   }
-  const mem = JSON.parse(fs.readFileSync(p, 'utf8')) as UserMemory
-  // backfill fields for existing wallets
-  if (!mem.intentHistory) mem.intentHistory = []
-  if (!mem.adviceLog)     mem.adviceLog     = []
+}
+
+export function getMemory(wallet: string): UserMemory {
+  const key = wallet.toLowerCase()
+  if (_memCache.has(key)) return _memCache.get(key)!
+  const p = memPath(wallet)
+  let mem: UserMemory
+  try {
+    if (!fs.existsSync(p)) {
+      mem = freshMemory(wallet)
+    } else {
+      mem = JSON.parse(fs.readFileSync(p, 'utf8')) as UserMemory
+      if (!mem.intentHistory) mem.intentHistory = []
+      if (!mem.adviceLog)     mem.adviceLog     = []
+    }
+  } catch {
+    mem = freshMemory(wallet)
+  }
+  _memCache.set(key, mem)
   return mem
 }
 
 export function saveMemory(mem: UserMemory): void {
   mem.lastSeen = new Date().toISOString()
-  fs.mkdirSync(MEMORY_DIR, { recursive: true })
-  fs.writeFileSync(memPath(mem.wallet), JSON.stringify(mem, null, 2))
+  _memCache.set(mem.wallet.toLowerCase(), mem)   // update cache synchronously
+  try {
+    fs.mkdirSync(MEMORY_DIR, { recursive: true })
+    fs.writeFileSync(memPath(mem.wallet), JSON.stringify(mem, null, 2))
+  } catch { /* /tmp write failure is non-fatal — cache still holds the data */ }
 }
 
 export function updatePortfolioSnapshot(wallet: string, snapshot: any): void {
