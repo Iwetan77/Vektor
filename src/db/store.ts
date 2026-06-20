@@ -4,13 +4,9 @@
  * Drop-in Supabase swap: replace read/write with Supabase client calls.
  */
 
-import fs   from 'fs'
-import path from 'path'
 import { v4 as uuid } from 'uuid'
 import type { ParsedIntent } from '../parser/types.js'
-
-const DATA_BASE = process.env.VERCEL ? '/tmp/vektor-data' : path.resolve(process.cwd(), 'data')
-const DATA_FILE = path.join(DATA_BASE, 'store.json')
+import { KvBackedJson } from './kv.js'
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
 
@@ -103,33 +99,31 @@ interface StoreData {
 
 /* ─── I/O ───────────────────────────────────────────────────────────────── */
 
-// Module-level cache — survives across requests on the same warm container.
-let _cache: StoreData | null = null
-
 function empty(): StoreData {
   return { scheduled: [], conditions: [], payments: [], positions: [], invites: [] }
 }
 
+// Durable, cold-start-safe store (Upstash KV when configured, else /tmp).
+const _store = new KvBackedJson<StoreData>('vektor:store', empty)
+
 function load(): StoreData {
-  if (_cache) return _cache
-  try {
-    if (!fs.existsSync(DATA_FILE)) { _cache = empty(); return _cache }
-    const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) as StoreData
-    if (!data.invites) data.invites = []
-    _cache = data
-    return _cache
-  } catch {
-    _cache = empty()
-    return _cache
-  }
+  const data = _store.get()
+  if (!data.invites) data.invites = []
+  return data
 }
 
 function save(data: StoreData): void {
-  _cache = data   // update cache synchronously
-  try {
-    fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true })
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2))
-  } catch { /* /tmp write failure is non-fatal — cache still holds the data */ }
+  _store.set(data)
+}
+
+/**
+ * Pull the latest store from the durable backend into the in-memory copy so a
+ * cold lambda (or a different instance than the one that wrote) sees current
+ * state. Cheap — throttled internally. Call before reads in request middleware
+ * and at the top of each cron tick.
+ */
+export async function syncStoreFromKV(force = false): Promise<void> {
+  await _store.hydrate(force)
 }
 
 /* ─── Scheduled intents ──────────────────────────────────────────────────── */

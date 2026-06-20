@@ -8,8 +8,9 @@
 
 import cron      from 'node-cron'
 import { EventEmitter } from 'events'
-import { getAllScheduled, markScheduledRun, type ScheduledIntent } from '../db/store.js'
+import { getAllScheduled, markScheduledRun, syncStoreFromKV, type ScheduledIntent } from '../db/store.js'
 import { addAlert } from '../memory/index.js'
+import { internalBaseUrl } from '../lib/internal-url.js'
 
 export const schedulerEvents = new EventEmitter()
 
@@ -93,8 +94,7 @@ async function tryEchoSessionExecute(
     const meta = (await readEchoData(item.wallet)).sessionKeyMetadata
     if (!meta || meta.expiresAt <= Date.now()) return false
 
-    const port = process.env.PORT ?? '3001'
-    const resp = await fetch(`http://127.0.0.1:${port}/api/echo/${item.wallet}/execute`, {
+    const resp = await fetch(`${internalBaseUrl()}/api/echo/${item.wallet}/execute`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json', 'x-echo-worker-secret': workerSecret },
       body:    JSON.stringify({ from: fromToken, to: toToken, amount }),
@@ -200,23 +200,32 @@ async function tryAutoExecute(item: ScheduledIntent): Promise<void> {
   }
 }
 
+/**
+ * One scheduler pass: fire any due intents. Used by the local node-cron AND by
+ * the serverless /api/cron/tick endpoint (Vercel has no long-running process).
+ */
+export async function runScheduleTick(): Promise<{ due: number }> {
+  await syncStoreFromKV(true)   // see schedules written by any instance
+  const now       = Date.now()
+  const scheduled = getAllScheduled()
+  let due = 0
+
+  for (const item of scheduled) {
+    const nextRun = new Date(item.schedule.nextRun).getTime()
+    if (nextRun > now) continue
+
+    due++
+    // Advance schedule (or mark done for one-time)
+    const next = nextRunAfter(item)
+    markScheduledRun(item.id, next)
+
+    // Fire: session key → server key → one-tap alert
+    await tryAutoExecute(item)
+  }
+  return { due }
+}
+
 export function startScheduler() {
   console.log('  Scheduler   →  checking every minute')
-
-  cron.schedule('* * * * *', async () => {
-    const now       = Date.now()
-    const scheduled = getAllScheduled()
-
-    for (const item of scheduled) {
-      const nextRun = new Date(item.schedule.nextRun).getTime()
-      if (nextRun > now) continue
-
-      // Advance schedule (or mark done for one-time)
-      const next = nextRunAfter(item)
-      markScheduledRun(item.id, next)
-
-      // Fire: auto-execute if we have a server key, otherwise alert
-      await tryAutoExecute(item)
-    }
-  })
+  cron.schedule('* * * * *', () => { runScheduleTick().catch(() => {}) })
 }

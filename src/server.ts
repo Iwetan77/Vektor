@@ -61,6 +61,7 @@ import {
   addCondition, getConditions, cancelCondition,
   getPositions, addPosition, cancelCondition as removeCondition,
   createInviteLink, getInviteLink, touchInviteLink, markInviteClaimed,
+  syncStoreFromKV,
 } from './db/store.js'
 import {
   getMemory, saveMemory, buildMemoryContext,
@@ -68,8 +69,8 @@ import {
   addAlert, incrementIntentCount, logIntent, updateIntentStatus, addAdvice, getAdvice,
   getPreferredLanguage, setPreferredLanguage,
 } from './memory/index.js'
-import { startScheduler }        from './scheduler/worker.js'
-import { startConditionMonitor, getCurrentPrice, getAllPrices } from './conditions/monitor.js'
+import { startScheduler, runScheduleTick }        from './scheduler/worker.js'
+import { startConditionMonitor, runConditionTick, getCurrentPrice, getAllPrices } from './conditions/monitor.js'
 import { startAlertMonitor, registerWallet }     from './alerts/monitor.js'
 import { readEchoData, writeEchoData }           from './echo/walrus.js'
 import { calculateEchoScore, scoreInsights }     from './echo/score.js'
@@ -327,6 +328,15 @@ app.use(cors({
   credentials: true,
 }))
 app.use(express.json())
+
+// Pull the latest durable store (Upstash KV when configured) into the in-memory
+// copy before handlers read it, so a cold lambda — or a different instance than
+// the one that wrote — sees current invites/conditions/schedules. Throttled
+// internally (no-op within its TTL), and a no-op entirely when KV isn't set.
+app.use(async (_req, _res, next) => {
+  try { await syncStoreFromKV() } catch { /* fall back to in-memory cache */ }
+  next()
+})
 
 /* ─── Rate limiting (10/min/IP on hot user-input routes) ─────────────── */
 const intentLimiter = rateLimit({
@@ -2625,6 +2635,32 @@ app.post('/api/echo/:wallet/parse-rule', requireWalletSigOrZkLogin(), async (req
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     res.status(500).json({ ok: false, error: msg })
+  }
+})
+
+/* ─── Cron tick — drives Echo watches & schedules in serverless ──────────
+   Vercel has no long-running process, so setInterval/node-cron never run there.
+   An external scheduler (cron-job.org, GitHub Actions, or a Vercel Cron) should
+   hit this once a minute. Auth: CRON_SECRET via `x-cron-secret` header or
+   `?secret=`. One pass = evaluate price conditions + fire due schedules. */
+
+app.all('/api/cron/tick', async (req, res) => {
+  const secret = process.env.CRON_SECRET
+  if (!secret) { res.status(503).json({ ok: false, error: 'CRON_SECRET not configured' }); return }
+  const provided =
+    req.header('x-cron-secret') ??
+    (req.header('authorization')?.replace(/^Bearer\s+/i, '')) ??
+    (req.query.secret as string | undefined)
+  if (provided !== secret) { res.status(401).json({ ok: false, error: 'unauthorized' }); return }
+
+  try {
+    const [conditions, schedules] = await Promise.all([
+      runConditionTick().catch(e => ({ error: String(e?.message ?? e) })),
+      runScheduleTick().catch(e => ({ error: String(e?.message ?? e) })),
+    ])
+    res.json({ ok: true, conditions, schedules, at: new Date().toISOString() })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) })
   }
 })
 

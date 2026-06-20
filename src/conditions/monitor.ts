@@ -7,8 +7,9 @@
 
 import { EventEmitter }          from 'events'
 import { PriceServiceConnection } from '@pythnetwork/price-service-client'
-import { getAllConditions, markConditionFired, type Condition } from '../db/store.js'
+import { getAllConditions, markConditionFired, syncStoreFromKV, type Condition } from '../db/store.js'
 import { addAlert }               from '../memory/index.js'
+import { internalBaseUrl }        from '../lib/internal-url.js'
 
 export const conditionEvents = new EventEmitter()
 
@@ -65,8 +66,65 @@ const TOKEN_DECIMALS: Record<string, number> = {
   SUI: 1e9, USDC: 1e6, USDT: 1e6, DEEP: 1e6, WETH: 1e8, WBTC: 1e8, BUCK: 1e9,
 }
 
+/**
+ * Preferred path: execute the condition's action autonomously via the user's
+ * Echo session key (a delegated, on-chain-capped ephemeral key) so it works
+ * while the user is offline, without any server-wide SUI_PRIVATE_KEY. Routes
+ * through /api/echo/:wallet/execute so the on-chain spend-cap check runs
+ * atomically. Returns true only if the swap actually executed.
+ */
+async function tryEchoSessionExecute(
+  cond: Condition,
+  fromToken: string,
+  toToken: string,
+  amount: number,
+  currentPrice: number,
+): Promise<boolean> {
+  if (!cond.autoExecute) return false
+  const workerSecret = process.env.ECHO_WORKER_SECRET
+  if (!workerSecret) return false
+  try {
+    const [{ loadSessionKeypair }, { readEchoData }] = await Promise.all([
+      import('../echo/session.js'),
+      import('../echo/walrus.js'),
+    ])
+    const keypair = await loadSessionKeypair(cond.wallet)
+    if (!keypair) return false
+    const meta = (await readEchoData(cond.wallet)).sessionKeyMetadata
+    if (!meta || meta.expiresAt <= Date.now()) return false
+
+    const resp = await fetch(`${internalBaseUrl()}/api/echo/${cond.wallet}/execute`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'x-echo-worker-secret': workerSecret },
+      body:    JSON.stringify({ from: fromToken, to: toToken, amount }),
+    })
+    const json = await resp.json().catch(() => ({} as any))
+    if (!resp.ok || !json?.digest) return false   // cap exceeded / quote failed → fall through
+
+    const digest = String(json.digest)
+    addAlert(cond.wallet, {
+      type:     'condition',
+      message:  `✓ Auto-executed via Echo session key: ${amount} ${fromToken} → ${toToken} at $${currentPrice.toFixed(4)}. TX: ${digest.slice(0, 12)}…${digest.slice(-6)}`,
+      severity: 'info',
+    })
+    conditionEvents.emit('executed', { condition: cond, digest, currentPrice })
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** Try to auto-execute a condition's action server-side using the wallet keypair */
 async function tryAutoExecute(cond: Condition, currentPrice: number): Promise<void> {
+  // 1. Per-user Echo session key (offline-friendly, on-chain capped).
+  {
+    const parsed    = cond.action
+    const fromToken = (parsed.input_asset ?? cond.trigger.asset ?? 'SUI').toUpperCase()
+    const toToken   = (parsed.output_goal ?? 'USDC').toUpperCase()
+    const amount    = parsed.input_amount ?? 0
+    if (amount > 0 && await tryEchoSessionExecute(cond, fromToken, toToken, amount, currentPrice)) return
+  }
+
   const privateKey = process.env.SUI_PRIVATE_KEY
   if (!privateKey) {
     // No key — send a rich actionable alert
@@ -132,25 +190,33 @@ async function tryAutoExecute(cond: Condition, currentPrice: number): Promise<vo
   }
 }
 
+/**
+ * One evaluation pass: refresh prices, then fire any met conditions. Used by the
+ * local setInterval AND by the serverless /api/cron/tick endpoint (Vercel has no
+ * long-running process, so the cron drives this instead of setInterval).
+ */
+export async function runConditionTick(): Promise<{ checked: number; fired: number }> {
+  await syncStoreFromKV(true)   // ensure we see conditions written by any instance
+  await refreshPrices()
+  const conditions = getAllConditions()
+  let fired = 0
+
+  for (const cond of conditions) {
+    if (!checkCondition(cond, priceCache)) continue
+
+    markConditionFired(cond.id)
+    fired++
+
+    const price = priceCache[cond.trigger.asset.toUpperCase()] ?? 0
+    conditionEvents.emit('triggered', { condition: cond, currentPrice: price })
+
+    await tryAutoExecute(cond, price)
+  }
+  return { checked: conditions.length, fired }
+}
+
 export function startConditionMonitor() {
   console.log('  Conditions  →  polling Pyth every 30s')
-
-  async function tick() {
-    await refreshPrices()
-    const conditions = getAllConditions()
-
-    for (const cond of conditions) {
-      if (!checkCondition(cond, priceCache)) continue
-
-      markConditionFired(cond.id)
-
-      const price = priceCache[cond.trigger.asset.toUpperCase()] ?? 0
-      conditionEvents.emit('triggered', { condition: cond, currentPrice: price })
-
-      await tryAutoExecute(cond, price)
-    }
-  }
-
-  tick().catch(() => {})
-  setInterval(() => tick().catch(() => {}), 30_000)
+  runConditionTick().catch(() => {})
+  setInterval(() => runConditionTick().catch(() => {}), 30_000)
 }

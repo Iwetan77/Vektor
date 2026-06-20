@@ -12,8 +12,7 @@
 import type { WalrusClient }     from '@mysten/walrus'
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client'
 import { Ed25519Keypair }        from '@mysten/sui/keypairs/ed25519'
-import fs   from 'fs'
-import path from 'path'
+import { KvBackedJson }          from '../db/kv.js'
 
 /* ─── Network config ─────────────────────────────────────────────────────── */
 
@@ -56,23 +55,19 @@ function getSigner(): Ed25519Keypair {
 // Maps walletAddress → { dataKey → blobId }
 // Only tiny blobId strings (~60 chars) live here.  All real data is in Walrus.
 
-// Vercel's filesystem is read-only except /tmp, so writable data must live there.
-const DATA_DIR = process.env.VERCEL ? '/tmp/vektor-data' : path.resolve(process.cwd(), 'data')
-const REGISTRY_FILE = path.join(DATA_DIR, 'walrus-registry.json')
+// Durable, cold-start-safe (Upstash KV when configured, else /tmp). Without this
+// the wallet→blobId index is lost on every Vercel cold start, so a saved contact
+// becomes unreadable on the next request ("no address saved for …").
 type Registry = Record<string, Record<string, string>>
 
+const _registry = new KvBackedJson<Registry>('vektor:walrus-registry', () => ({}))
+
 function loadRegistry(): Registry {
-  try {
-    if (!fs.existsSync(REGISTRY_FILE)) return {}
-    return JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8')) as Registry
-  } catch {
-    return {}
-  }
+  return _registry.get()
 }
 
 function saveRegistry(r: Registry): void {
-  fs.mkdirSync(path.dirname(REGISTRY_FILE), { recursive: true })
-  fs.writeFileSync(REGISTRY_FILE, JSON.stringify(r, null, 2))
+  _registry.set(r)
 }
 
 /* ─── Local data cache (source of truth) ─────────────────────────────────── */
@@ -82,21 +77,16 @@ function saveRegistry(r: Registry): void {
 // local JSON file written synchronously; Walrus is a best-effort durable backup.
 // Maps walletAddress → { dataKey → JSON value }.
 
-const DATA_FILE = path.join(DATA_DIR, 'walrus-data.json')
 type DataStore = Record<string, Record<string, unknown>>
 
+const _dataStore = new KvBackedJson<DataStore>('vektor:walrus-data', () => ({}))
+
 function loadDataStore(): DataStore {
-  try {
-    if (!fs.existsSync(DATA_FILE)) return {}
-    return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) as DataStore
-  } catch {
-    return {}
-  }
+  return _dataStore.get()
 }
 
 function saveDataStore(s: DataStore): void {
-  fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true })
-  fs.writeFileSync(DATA_FILE, JSON.stringify(s))
+  _dataStore.set(s)
 }
 
 function localGet(userAddress: string, key: string): unknown | undefined {
@@ -110,6 +100,11 @@ function localPut(userAddress: string, key: string, data: unknown): void {
   saveDataStore(store)
 }
 
+/** Hydrate the durable Walrus index + data cache (call before contact reads). */
+export async function syncWalrusFromKV(force = false): Promise<void> {
+  await Promise.all([_registry.hydrate(force), _dataStore.hydrate(force)])
+}
+
 /* ─── Public API ──────────────────────────────────────────────────────────── */
 
 /**
@@ -121,6 +116,9 @@ export async function writeUserData(
   key: string,
   data: unknown,
 ): Promise<string> {
+  // 0. Pull current durable state so we merge onto the latest, not a stale copy.
+  await syncWalrusFromKV()
+
   // 1. Authoritative local write — synchronous and reliable. This is what
   //    every subsequent read returns, so the user's edit is never lost even if
   //    Walrus is unreachable or the funding wallet has no WAL.
@@ -163,6 +161,9 @@ export async function readUserData(
   userAddress: string,
   key: string,
 ): Promise<unknown | null> {
+  // 0. Pull current durable state (KV) so a cold instance sees prior writes.
+  await syncWalrusFromKV()
+
   // 1. Local cache is authoritative and fast.
   const local = localGet(userAddress, key)
   if (local !== undefined) return local
