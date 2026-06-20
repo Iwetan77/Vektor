@@ -34,6 +34,15 @@ function truncateAddr(addr: string): string {
   return `${addr.slice(0, 8)}…${addr.slice(-6)}`
 }
 
+/** Accept a 0x address or a SuiNS name (e.g. "mum.sui" or "@mum"). The server
+ *  resolves names to addresses on save. */
+function isValidRecipient(v: string): boolean {
+  const s = v.trim().toLowerCase()
+  if (/^0x[0-9a-f]{1,64}$/.test(s) && s.length >= 10) return true
+  if (s.startsWith('@') && s.length > 1) return true
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.sui$/.test(s)
+}
+
 function Empty({ label }: { label: string }) {
   return <p className="text-xs text-slate-600 text-center py-10">{label}</p>
 }
@@ -98,7 +107,7 @@ export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
     const name = addName.trim()
     const addr = addAddr.trim()
     if (!name || !addr) { setAddErr('Name and address are required.'); return }
-    if (!addr.startsWith('0x') || addr.length < 10) { setAddErr('Invalid Sui address.'); return }
+    if (!isValidRecipient(addr)) { setAddErr('Enter a 0x Sui address or a SuiNS name (e.g. mum.sui).'); return }
     setAdding(true)
     try {
       const res  = await signedFetch(`/api/contacts/${wallet}`, {
@@ -147,8 +156,8 @@ export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
     if (!name)              { setGroupErr('Group name is required.'); return }
     if (members.length < 1) { setGroupErr('Add at least one member.'); return }
     for (const m of members) {
-      if (!m.address.startsWith('0x') || m.address.length < 10) {
-        setGroupErr(`Invalid address for member "${m.name}".`); return
+      if (!isValidRecipient(m.address)) {
+        setGroupErr(`Invalid address for member "${m.name}" — use a 0x address or SuiNS name.`); return
       }
     }
     setCreatingGroup(true)
@@ -236,7 +245,7 @@ export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
                   <input
                     value={addAddr}
                     onChange={e => setAddAddr(e.target.value)}
-                    placeholder="0x... address"
+                    placeholder="0x… or name.sui"
                     className="col-span-1 bg-white/5 border border-white/8 rounded-lg px-3 py-2 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-purple-500/40 font-mono text-xs"
                   />
                 </div>
@@ -320,7 +329,7 @@ export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
                       <input
                         value={m.address}
                         onChange={e => setMemberField(i, 'address', e.target.value)}
-                        placeholder="0x address"
+                        placeholder="0x… or name.sui"
                         className="flex-1 min-w-0 bg-white/5 border border-white/8 rounded-lg px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-purple-500/40 font-mono"
                       />
                       {groupMembers.length > 1 && (

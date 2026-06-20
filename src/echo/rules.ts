@@ -18,8 +18,15 @@ Supported rule types:
   yield_optimization — "move idle stablecoins to yield automatically"
   custom             — anything that doesn't fit the above
 
-Return this exact JSON shape:
+FIRST decide whether the input is actually an automation rule. Greetings, small
+talk, questions, thanks, or anything that is not a standing condition+action
+("if/when X then do Y", "always keep…", "never let…") is NOT a rule.
+If it is NOT a rule, return exactly:
+{ "isRule": false, "interpretation": string (one friendly sentence telling the user this isn't a rule and giving one concrete example they could set) }
+
+If it IS a rule, return this exact JSON shape:
 {
+  "isRule": true,
   "parsed": {
     "type": "health_factor" | "balance_floor" | "stop_loss" | "rebalance" | "yield_optimization" | "custom",
     "asset": string or null,
@@ -45,8 +52,9 @@ Examples:
 `
 
 export async function parseRule(raw: string): Promise<{
-  parsed:         EchoRule['parsed']
-  interpretation: string
+  isRule:          boolean
+  parsed?:         EchoRule['parsed']
+  interpretation:  string
 }> {
   const response = await complete({
     system:    RULE_SYSTEM,
@@ -61,7 +69,19 @@ export async function parseRule(raw: string): Promise<{
     .trim()
 
   const obj = JSON.parse(cleaned)
+
+  // Guard: the model decided this isn't a rule (greeting, question, chit-chat).
+  // Don't fabricate a "custom" rule — tell the caller so it can reply naturally.
+  if (obj.isRule === false || !obj.parsed) {
+    return {
+      isRule:         false,
+      interpretation: obj.interpretation
+        ?? "That doesn't look like an automation rule. Try something like \"exit any memecoin down more than 25%\" or \"never let my health factor drop below 1.5\".",
+    }
+  }
+
   return {
+    isRule:         true,
     parsed:         obj.parsed,
     interpretation: obj.interpretation ?? `Echo will apply this rule: ${raw}`,
   }

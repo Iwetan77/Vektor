@@ -253,13 +253,14 @@ function RulesEditor({
   const [input,          setInput]          = useState('')
   const [parsing,        setParsing]        = useState(false)
   const [preview,        setPreview]        = useState<{ interpretation: string; rule: EchoRule } | null>(null)
+  const [notice,         setNotice]         = useState<string | null>(null)
   const [err,            setErr]            = useState<string | null>(null)
 
   async function handleParse(e: React.FormEvent) {
     e.preventDefault()
     const raw = input.trim()
     if (!raw) return
-    setErr(null); setParsing(true); setPreview(null)
+    setErr(null); setNotice(null); setParsing(true); setPreview(null)
     try {
       const res  = await signedFetch(`/api/echo/${wallet}/parse-rule`, {
         method: 'POST',
@@ -267,6 +268,11 @@ function RulesEditor({
       })
       const json = await res.json()
       if (!json.ok) throw new Error(json.error)
+      // Guard: input wasn't an automation rule (greeting, question, chit-chat).
+      if (json.isRule === false || !json.parsed) {
+        setNotice(json.interpretation ?? "That doesn't look like an automation rule.")
+        return
+      }
       setPreview({
         interpretation: json.interpretation,
         rule: { id: crypto.randomUUID(), raw, parsed: json.parsed, active: true, autoExecute: false, createdAt: Date.now() },
@@ -327,12 +333,17 @@ function RulesEditor({
       <form onSubmit={handleParse} className="space-y-3">
         <textarea
           value={input}
-          onChange={e => { setInput(e.target.value); setPreview(null); setErr(null) }}
+          onChange={e => { setInput(e.target.value); setPreview(null); setErr(null); setNotice(null) }}
           placeholder={`Write a rule for Echo…\n\n${RULE_EXAMPLES[Math.floor(Date.now() / 10000) % RULE_EXAMPLES.length]}`}
           rows={3}
           className="w-full bg-[#111118] border border-white/8 rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-purple-500/25 resize-none leading-relaxed"
         />
         {err && <p className="text-xs text-red-400">{err}</p>}
+        {notice && (
+          <p className="text-xs text-slate-400 bg-white/5 border border-white/10 rounded-lg px-3 py-2 leading-relaxed">
+            {notice}
+          </p>
+        )}
         <button
           type="submit"
           disabled={!input.trim() || parsing}

@@ -14,6 +14,15 @@ import 'dotenv/config'
 import { File as NodeFile } from 'node:buffer'
 if (!globalThis.File) { (globalThis as any).File = NodeFile }
 
+// Make BigInt JSON-serializable app-wide. The Sui SDK and Routex return BigInt
+// amounts; any of them leaking into res.json() would otherwise throw
+// "Do not know how to serialize a BigInt" and surface as a swap error. Emitting
+// them as decimal strings is the same shape our serializeQuote() already uses,
+// and the rewrite path already parses amount fields back with BigInt(String(x)).
+if (!(BigInt.prototype as any).toJSON) {
+  ;(BigInt.prototype as any).toJSON = function () { return this.toString() }
+}
+
 import fs               from 'fs'
 import path             from 'path'
 import express          from 'express'
@@ -860,11 +869,16 @@ app.post('/api/intent', async (req, res) => {
 
       if (sub === 'add') {
         const name    = steps[1] ?? (parsed as any).recipient_name ?? ''
-        const address = steps[2] ?? parsed.recipient ?? ''
+        const rawAddr = steps[2] ?? parsed.recipient ?? ''
         const note    = steps[3] ?? ''
-        if (!name || !address) {
+        if (!name || !rawAddr) {
           res.json({ ok: false, error: 'Usage: /contact add 0xAddress as "Name"', language: lang }); return
         }
+        const resolvedAddr = await resolveAddressInput(rawAddr)
+        if (!resolvedAddr.ok) {
+          res.json({ ok: false, error: resolvedAddr.error, language: lang }); return
+        }
+        const address = resolvedAddr.address
         const contact = sender !== SIM_ADDR
           ? await addContact(sender, name, address, note || undefined).catch(e => { throw e })
           : { name, address }
@@ -2010,6 +2024,24 @@ app.get('/api/memory/:wallet', (req, res) => {
 
 /* ─── Contacts ────────────────────────────────────────────────────────── */
 
+/**
+ * Normalize a contact/group address input. Accepts a raw 0x address OR a SuiNS
+ * name (e.g. "mum.sui", "@mum") and resolves the name to its on-chain address
+ * so we only ever store canonical 0x addresses. SuiNS resolves on mainnet.
+ */
+async function resolveAddressInput(
+  input: string,
+): Promise<{ ok: true; address: string } | { ok: false; error: string }> {
+  const raw = (input ?? '').trim()
+  if (/^0x[0-9a-fA-F]{1,64}$/.test(raw)) return { ok: true, address: raw }
+  if (isSuiName(raw)) {
+    const resolved = await resolveSuiName(raw).catch(() => null)
+    if (resolved) return { ok: true, address: resolved }
+    return { ok: false, error: `Couldn't resolve ${raw} — that SuiNS name isn't registered.` }
+  }
+  return { ok: false, error: 'Address must be a 0x Sui address or a SuiNS name (e.g. mum.sui).' }
+}
+
 app.get('/api/contacts/:wallet', async (req, res) => {
   try {
     const contacts = await listContacts(req.params.wallet)
@@ -2024,7 +2056,9 @@ app.post('/api/contacts/:wallet', requireWalletSigOrZkLogin(), async (req, res) 
   try {
     const { name, address, note } = req.body as { name: string; address: string; note?: string }
     if (!name || !address) { res.status(400).json({ ok: false, error: 'name and address required' }); return }
-    const contact = await addContact(req.params.wallet, name, address, note)
+    const resolved = await resolveAddressInput(address)
+    if (!resolved.ok) { res.status(400).json({ ok: false, error: resolved.error }); return }
+    const contact = await addContact(req.params.wallet, name, resolved.address, note)
     res.json({ ok: true, contact })
   } catch (err) {
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) })
@@ -2046,7 +2080,14 @@ app.post('/api/groups/:wallet', requireWalletSigOrZkLogin(), async (req, res) =>
   try {
     const { name, members } = req.body as { name: string; members: { name: string; address: string }[] }
     if (!name) { res.status(400).json({ ok: false, error: 'group name required' }); return }
-    const group = await createGroup(req.params.wallet, name, members ?? [])
+    // Resolve any SuiNS member addresses to canonical 0x before storing.
+    const resolvedMembers: { name: string; address: string }[] = []
+    for (const m of members ?? []) {
+      const r = await resolveAddressInput(m.address)
+      if (!r.ok) { res.status(400).json({ ok: false, error: `${m.name || 'member'}: ${r.error}` }); return }
+      resolvedMembers.push({ name: m.name, address: r.address })
+    }
+    const group = await createGroup(req.params.wallet, name, resolvedMembers)
     res.json({ ok: true, group })
   } catch (err) {
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) })
@@ -2057,7 +2098,9 @@ app.post('/api/groups/:wallet/:groupName/members', requireWalletSigOrZkLogin(), 
   try {
     const { name, address } = req.body as { name: string; address: string }
     if (!name || !address) { res.status(400).json({ ok: false, error: 'name and address required' }); return }
-    const ok = await addGroupMember(req.params.wallet, decodeURIComponent(req.params.groupName), { name, address })
+    const r = await resolveAddressInput(address)
+    if (!r.ok) { res.status(400).json({ ok: false, error: r.error }); return }
+    const ok = await addGroupMember(req.params.wallet, decodeURIComponent(req.params.groupName), { name, address: r.address })
     res.json({ ok })
   } catch (err) {
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) })
@@ -2294,7 +2337,10 @@ app.post('/api/echo/:wallet/rules', requireWalletSigOrZkLogin(), async (req, res
     const { raw, autoExecute } = req.body as { raw: string; autoExecute?: boolean }
     if (!raw?.trim()) { res.status(400).json({ ok: false, error: 'Rule text required' }); return }
 
-    const { parsed, interpretation } = await parseRule(raw.trim())
+    const { isRule, parsed, interpretation } = await parseRule(raw.trim())
+    if (!isRule || !parsed) {
+      res.json({ ok: false, notARule: true, interpretation }); return
+    }
 
     const rule: EchoRule = {
       id:          crypto.randomUUID(),
