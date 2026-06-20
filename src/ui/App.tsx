@@ -121,29 +121,17 @@ function ZkAvatarMenu({
   const totalUsd = hasBalance ? `$${Number(portfolio.totalUsd).toFixed(2)}` : null
 
   return (
-    <div ref={ref} className="relative shrink-0 flex items-center gap-1.5 md:gap-2">
-      {/* Combined wallet balance — every asset, shown on mobile + desktop */}
-      {totalUsd ? (
-        <div className="flex items-center gap-1.5 px-2.5 h-9 rounded-lg border border-white/10 bg-[#111118] text-xs md:text-sm font-mono text-slate-300 select-none">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-          <span>{totalUsd}</span>
-        </div>
-      ) : (
-        <div className="flex items-center gap-1.5 px-2.5 h-9 rounded-lg border border-white/10 bg-[#111118]">
-          <span className="w-12 h-3 rounded bg-white/10 animate-pulse" />
-        </div>
-      )}
-
+    <div ref={ref} className="relative shrink-0">
       <button
         onClick={() => setOpen(v => !v)}
         title={user.email ?? 'Account'}
-        className="flex items-center justify-center w-9 h-9 rounded-full bg-purple-600 hover:bg-purple-500 ring-1 ring-purple-400/30 transition-colors shrink-0"
+        className="flex items-center justify-center w-9 h-9 rounded-full bg-purple-600 hover:bg-purple-500 ring-1 ring-purple-400/30 transition-colors"
       >
         <span className="text-sm font-semibold text-white">{initial}</span>
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-72 rounded-xl border border-white/10 bg-[#0e0e14] shadow-2xl shadow-black/60 z-50 overflow-hidden">
+        <div className="absolute right-0 top-full mt-2 w-72 max-h-[calc(100vh-5rem)] overflow-y-auto rounded-xl border border-white/10 bg-[#0e0e14] shadow-2xl shadow-black/60 z-50">
           {/* Header — picture + name/email */}
           <div className="flex items-center gap-3 p-3 border-b border-white/5">
             <div className="w-10 h-10 rounded-full bg-purple-600 ring-1 ring-purple-400/30 flex items-center justify-center shrink-0">
