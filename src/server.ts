@@ -14,14 +14,10 @@ import 'dotenv/config'
 import { File as NodeFile } from 'node:buffer'
 if (!globalThis.File) { (globalThis as any).File = NodeFile }
 
-// Make BigInt JSON-serializable app-wide. The Sui SDK and Routex return BigInt
-// amounts; any of them leaking into res.json() would otherwise throw
-// "Do not know how to serialize a BigInt" and surface as a swap error. Emitting
-// them as decimal strings is the same shape our serializeQuote() already uses,
-// and the rewrite path already parses amount fields back with BigInt(String(x)).
-if (!(BigInt.prototype as any).toJSON) {
-  ;(BigInt.prototype as any).toJSON = function () { return this.toString() }
-}
+// BigInt values in res.json() are handled via Express's json replacer below.
+// Do NOT patch BigInt.prototype.toJSON — that hijacks SDK-internal JSON.stringify
+// calls (e.g. Aftermath PTB builder expects BigInt serialized as "1000000n" but
+// the prototype patch emits "1000000", causing HTTP 400 from the Aftermath API).
 
 import fs               from 'fs'
 import path             from 'path'
@@ -101,6 +97,12 @@ function bumpRegistry(field: 'total_transactions' | 'total_rewrites'): void {
 }
 
 const app    = express()
+// Serialize BigInt values as decimal strings only in res.json() responses.
+// Scoped to Express output — does NOT touch BigInt.prototype, so SDK-internal
+// JSON.stringify calls (e.g. Aftermath PTB builder using "1000000n" format) are unaffected.
+app.set('json replacer', (_key: string, value: unknown) =>
+  typeof value === 'bigint' ? value.toString() : value
+)
 const PORT   = 3001
 
 // Hard ceiling on the whole getQuote call.
