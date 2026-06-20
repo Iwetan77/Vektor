@@ -1139,6 +1139,7 @@ export default function App() {
   const [showSlashMenu,   setShowSlashMenu]   = useState(false)
   const [currentPage,     setCurrentPage]     = useState<'chat' | 'echo'>('chat')
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  const [inviteClaim, setInviteClaim] = useState<{ amount: number; tokenSymbol: string; digest: string } | null>(null)
   const [echoAlerts,      setEchoAlerts]      = useState<EchoWsMessage[]>([])
   const wsRef = useRef<WebSocket | null>(null)
 
@@ -1290,6 +1291,26 @@ export default function App() {
 
     connect()
     return () => { wsRef.current?.close(); wsRef.current = null }
+  }, [effectiveAddress])
+
+  // After Google OAuth, fire any pending invite claim silently and show a toast.
+  useEffect(() => {
+    const token = localStorage.getItem('pending-invite')
+    if (!token || !effectiveAddress) return
+    localStorage.removeItem('pending-invite')
+    window.history.replaceState({}, '', window.location.pathname)
+    fetch(`/api/onboard/${token}/claim`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ recipientAddress: effectiveAddress }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok && d.digest) {
+          setInviteClaim({ amount: d.amount, tokenSymbol: d.tokenSymbol ?? 'SUI', digest: d.digest })
+        }
+      })
+      .catch(() => {})
   }, [effectiveAddress])
 
   function autoResize(el: HTMLTextAreaElement) {
@@ -1815,39 +1836,31 @@ export default function App() {
     ? `${account.address.slice(0, 6)}…${account.address.slice(-4)}`
     : null
 
-  // ── Welcome / onboarding page (invite link) ───────────────────────────────
-  if (showWelcome) {
-    return (
-      <WelcomePage
-        token={inviteToken}
-        connectOpen={connectOpen}
-        onConnectOpen={(open: boolean) => {
-          setConnectOpen(open)
-          if (!open && account) setShowWelcome(false)
-        }}
-        onZkLogin={async () => {
-          // Save token before OAuth redirect wipes the URL
-          if (inviteToken) localStorage.setItem('pending-invite', inviteToken)
-          await zkLogin.signIn()
-          setShowWelcome(false)
-        }}
-        zkAvailable={true}
-        // After Google sign-in, this address is the user's new zkLogin Sui wallet —
-        // WelcomePage's auto-claim effect will POST /api/onboard/:token/claim with it.
-        signedInAddress={zkLogin.user?.address ?? null}
-        onEnterApp={() => {
-          localStorage.removeItem('pending-invite')
-          window.history.replaceState({}, '', window.location.pathname)
-          setShowWelcome(false)
-        }}
-      />
-    )
-  }
+  // ── Auth gate ─────────────────────────────────────────────────────────────
+  // While /api/zklogin/me is in-flight, show nothing — avoids the 2-second
+  // flash of LandingPage for users who are already signed in via Google.
+  if (zkLogin.loading) return null
 
-  // ── Auth gate: only zkLogin signs you into the app ───────────────────────
-  // (Slush/wallet-connect is no longer a path in. Wait for /me probe so we
-  //  don't flash the landing for a user who's already signed in via Google.)
   if (!zkLogin.user) {
+    // Not signed in — show WelcomePage (invite flow) or generic landing.
+    if (showWelcome && inviteToken) {
+      return (
+        <WelcomePage
+          token={inviteToken}
+          onZkLogin={async () => {
+            // Persist token before OAuth wipes the URL on redirect
+            if (inviteToken) localStorage.setItem('pending-invite', inviteToken)
+            await zkLogin.signIn()
+          }}
+          zkAvailable={true}
+          onEnterApp={() => {
+            localStorage.removeItem('pending-invite')
+            window.history.replaceState({}, '', window.location.pathname)
+            setShowWelcome(false)
+          }}
+        />
+      )
+    }
     return <LandingPage />
   }
 
@@ -2022,6 +2035,19 @@ export default function App() {
         <div className={`flex-1 flex flex-col overflow-hidden ${currentPage !== 'chat' ? 'hidden' : ''}`}>
           <div className="flex-1 overflow-y-auto">
             <div className="max-w-3xl mx-auto px-4 py-8 space-y-8">
+
+              {/* Invite claim success toast */}
+              {inviteClaim && (
+                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 flex items-start justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <p className="text-sm text-emerald-300 font-semibold">
+                      ✓ Your {inviteClaim.amount} {inviteClaim.tokenSymbol} has arrived.
+                    </p>
+                    <p className="text-[10px] font-mono text-emerald-400/60">tx: {inviteClaim.digest}</p>
+                  </div>
+                  <button onClick={() => setInviteClaim(null)} className="text-slate-600 hover:text-slate-400 text-xs shrink-0">✕</button>
+                </div>
+              )}
 
               {/* Feature 9: Incoming payment card from ?pay= URL */}
               {incomingPayment && (
