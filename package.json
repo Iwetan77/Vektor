@@ -78,5 +78,8 @@
     "ptb",
     "aggregator"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  }
 }
