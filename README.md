@@ -1,242 +1,258 @@
 # Vektor
 
-Intent engine for Sui. Vektor wraps [Routex](https://www.npmjs.com/package/routex-sui) with structured intent parsing, multi-class risk assessment, CLI confirmation, and optional on-chain execution logging via a Move contract.
+**Financial OS for Sui.** Swap, lend, send, and automate — in plain English. Sign in with Google. No seed phrase.
+
+Live: [vektor-ebon.vercel.app](https://vektor-ebon.vercel.app)
+
+---
+
+## What it does
+
+Vektor is a chat-first interface for the Sui blockchain. You type what you want in plain English — or any of 25 supported languages — and Vektor parses your intent, runs a risk assessment, previews the transaction, and executes it with one tap.
+
+```
+"swap 10 USDC for SUI"
+"lend 100 USDC on NAVI"
+"send 5 SUI to adeniyi.sui"
+"DCA $50 into SUI every week for 30 days"
+"sell my SUI if price drops below $2"
+"pay rent: 30 USDC each to Alice, Bob, Charlie"
+```
+
+Authentication is via zkLogin — your Google account generates a Sui wallet. No private key to manage, no seed phrase to lose.
+
+---
+
+## Features
+
+### Core intents
+- **Swap** — multi-DEX routing via Routex (Cetus, Turbos, Aftermath, DeepBook, Bluefin, FlowX)
+- **Lend / Borrow / Repay** — NAVI Protocol integration with live rates and health factor monitoring
+- **Send** — native SUI and any token; resolves SuiNS names (e.g. `adeniyi.sui`)
+- **Batch & split payment** — pay multiple recipients in one transaction
+- **Contact payments** — save wallet addresses as names (`add Alice = 0x…`), pay by name
+
+### Automation
+- **DCA** — dollar-cost average into any asset on a daily / weekly / monthly schedule
+- **Scheduled swaps** — one-time swaps at a future date
+- **Conditional orders** — trigger actions when price crosses a threshold or health factor drops
+
+### Intelligence
+- **Guardian risk system** — every transaction is scored across 7 risk classes before you sign. Blocks dangerous trades; warns on high price impact, loose slippage, thin liquidity, large size
+- **Advice log** — Guardian recommendations from past swaps surface in the Advice tab
+- **Portfolio analysis** — `analyse my wallet` breaks down holdings and on-chain activity
+- **Transaction explainer** — `explain tx 5kT…abc` returns plain-English summaries of any Sui transaction
+- **Per-wallet memory** — Vektor remembers your preferences, past intents, and alerts across sessions
+
+### Echo — autonomous agent
+Echo gives Vektor the ability to act while you're offline. It uses session keys stored on Walrus and enforced by an on-chain `SessionAuthorization` object with configurable spend caps.
+
+- Create a session key → sign the on-chain authorization with your main wallet
+- Write rules in plain English: `never let my health factor drop below 1.5`, `exit any memecoin down 25%`
+- Toggle `autoExecute` per rule: off sends you a one-tap alert, on executes inside the on-chain limits
+- Revoke any time — closes the session authorization and the encrypted key on Walrus
+
+### Other
+- **Voice input** — speak your intent; transcribed and parsed in real time
+- **Multilingual** — 25 languages; African language DeFi terms stay in English by convention
+- **Onboarding** — `/onboard a friend with 0.001 SUI` generates a shareable invite link; the new user receives funds on sign-in
+- **History tab** — full intent log with success / pending / failed status
+- **SuiNS resolution** — addresses and `.sui` names resolve in both directions
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React 18 · Vite · Tailwind CSS |
+| Backend | Express 5 · Node.js · TypeScript |
+| AI parser | Groq `llama-3.3-70b` (default) · Anthropic Claude · Gemini |
+| Blockchain | Sui mainnet via `@mysten/sui` |
+| DEX routing | Routex SDK |
+| Lending | NAVI Protocol SDK |
+| Auth | zkLogin — Google OAuth → Sui address (no private key) |
+| Decentralised storage | Walrus (Echo session keys) |
+| Deployment | Vercel (frontend + serverless API) |
+
+---
 
 ## Architecture
 
 ```
-ParseIntentParams
-      │
-      ▼
-  parseIntent()          ← validates tokens, normalises amounts, assigns ID
-      │
-      ▼
-  PTBCompiler            ← calls Routex for a live quote + pre-built PTB
-      │                     [SEAL_V1.5 placeholder — encrypt before quote]
-      ▼
-  Guardian               ← 7 risk classes evaluated in parallel
-      │
-      ▼
-  ConfirmationGate       ← auto-confirm or interactive CLI prompt
-      │
-      ▼
-  execute()              ← submits PTB, appends VektorLog call atomically
-      │
-      ▼
-  VektorResult           ← digest, intentId, amountOut, log entry
+User message
+     │
+     ▼
+parseIntent()          — LLM extracts intent type, tokens, amounts, recipients
+     │
+     ▼
+validateIntent()       — sanity-checks token symbols, amounts, addresses
+     │
+     ▼
+Guardian v2            — 7 risk classes evaluated in parallel
+     │
+     ▼
+ConfirmationGate       — renders risk summary + PermissionCard for user review
+     │
+     ▼
+PTB compiled           — Routex quote (swap) / NAVI SDK (lend/borrow) / SUI transfer
+     │
+     ▼
+User signs             — zkLogin ephemeral key signs the PTB client-side
+     │
+     ▼
+Executed on-chain      — digest returned, receipt card rendered, history updated
 ```
 
-## Install
+---
+
+## Running locally
+
+### Prerequisites
+
+- Node.js 20+
+- A Groq API key (free at [console.groq.com](https://console.groq.com)) — or an Anthropic / Gemini key
+- A Google OAuth 2.0 client ID and secret
+
+### Setup
 
 ```bash
-npm install vektor-sui
+git clone https://github.com/iwetan77/Vektor.git
+cd Vektor
+npm install
+cp .env.example .env
 ```
 
-## Quick start
+Edit `.env`:
 
-```typescript
-import Vektor from 'vektor-sui'
+```env
+# AI provider — set exactly one
+GROQ_API_KEY=gsk_...
+# ANTHROPIC_API_KEY=sk-ant-...
+# GEMINI_API_KEY=...
 
-const vektor = new Vektor({
-  network: 'mainnet',
-  senderAddress: '0x...',
-  autoConfirm: false,           // set true to skip CLI prompt
-})
+# Sui network
+SUI_NETWORK=mainnet
 
-// Step-by-step
-const report = await vektor.guard({ action: 'swap', from: 'SUI', to: 'USDC', amount: '10' })
-const gate   = await vektor.confirm(report)   // prints risk summary, prompts y/N
+# Google OAuth (for zkLogin)
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REDIRECT_URI=http://localhost:3001/api/zklogin/callback
 
-if (gate.proceed) {
-  const result = await vektor.execute(gate, signer)
-  console.log(result.digest)
-}
-
-// All-in-one
-const result = await vektor.swap(
-  { action: 'swap', from: 'SUI', to: 'USDC', amount: '10', slippage: 'low' },
-  signer,
-)
+# Session encryption
+SESSION_SECRET=<random 32-char string>
 ```
 
-## Intent params
-
-| Field | Type | Description |
-|---|---|---|
-| `action` | `'swap'` | Operation type |
-| `from` | `string` | Input token symbol — `SUI`, `USDC`, `USDT`, `DEEP`, `WETH` |
-| `to` | `string` | Output token symbol |
-| `amount` | `string \| bigint` | Human amount (`'1.5'`) or raw base units (`1_500_000_000n`) |
-| `slippage` | `'low' \| 'medium' \| 'high' \| number` | Tolerance preset or exact fraction. Defaults to `'medium'` (0.5%) |
-| `maxPriceImpact` | `number` | Block threshold for price impact. Default `0.05` (5%) |
-| `deadlineSeconds` | `number` | Intent TTL in seconds. Default `28` |
-
-## Guardian — risk classes
-
-The Guardian evaluates 7 risk classes and marks each as `block`, `warn`, or `info`. A single `block` prevents execution.
-
-| Class | Trigger |
-|---|---|
-| `HIGH_PRICE_IMPACT` | Impact exceeds `maxPriceImpact` |
-| `LOOSE_SLIPPAGE` | Slippage warn >5%, block >20% |
-| `STALE_QUOTE` | Quote TTL < 5 s remaining |
-| `THIN_LIQUIDITY` | Impact >1% (pool is shallow) |
-| `INSUFFICIENT_GAS` | SUI balance < trade amount + 2× gas |
-| `PROTOCOL_CONCENTRATION` | 100% routed through a single non-DeepBook AMM |
-| `LARGE_TRADE` | Trade size >$5,000 USD equivalent |
-
-```typescript
-const report = await vektor.guard({ action: 'swap', from: 'SUI', to: 'USDC', amount: '1' })
-
-report.blocked        // true if any risk is severity='block'
-report.risks          // RiskFlag[]
-report.quote          // live RoutexQuote
-```
-
-## zkLogin
-
-Vektor ships optional zkLogin auth so users can sign transactions with a Google / Facebook / Twitch account — no private key required.
-
-```typescript
-import { ZkLoginAuth } from 'vektor-sui'
-
-const auth = new ZkLoginAuth('mainnet', {
-  clientId:    'YOUR_OAUTH_CLIENT_ID',
-  redirectUri: 'https://yourapp.com/callback',
-  provider:    'google',
-})
-
-// 1. Generate OAuth URL and redirect user
-const { url } = await auth.generateLoginUrl()
-
-// 2. After redirect, exchange JWT for a ZK session
-const session = await auth.handleCallback(jwt, userSalt)
-
-// session.address — use as senderAddress in VektorOptions
-// 3. Sign PTBs
-const signature = await auth.signTransaction(session, txBytes)
-```
-
-## VektorLog Move contract
-
-The `vektorlog` Move contract emits an `IntentExecuted` event atomically within the same PTB as the swap — so the log only appears on-chain if the trade succeeds.
-
-```
-contracts/vektorlog/
-  sources/vektorlog.move
-  Move.toml
-```
-
-Deploy:
+### Start
 
 ```bash
-cd contracts/vektorlog
-sui client publish --gas-budget 100000000
+# Terminal 1 — API server (port 3001)
+npm run dev:server
+
+# Terminal 2 — Vite dev server (port 5173)
+npm run dev:ui
 ```
 
-Pass the deployed package ID to `Vektor`:
+Open [http://localhost:5173](http://localhost:5173).
 
-```typescript
-const vektor = new Vektor({
-  network: 'mainnet',
-  senderAddress: '0x...',
-  vektorLogPackageId: '0x<PACKAGE_ID>',
-})
-```
-
-## API
-
-### `new Vektor(options)`
-
-| Option | Type | Description |
-|---|---|---|
-| `network` | `'mainnet' \| 'testnet'` | Default `'mainnet'` |
-| `senderAddress` | `string` | Sui wallet address |
-| `autoConfirm` | `boolean` | Skip CLI confirmation prompt. Default `false` |
-| `vektorLogPackageId` | `string` | Deployed VektorLog package. Omit to disable logging |
-
-### `vektor.guard(params)` → `GuardianReport`
-
-Parses the intent, fetches a live quote from Routex, and runs all 7 Guardian checks. Does not execute.
-
-### `vektor.confirm(report)` → `GateDecision`
-
-Prints a formatted risk summary. In interactive mode prompts `y/N`. In `autoConfirm` mode approves automatically unless a `block`-severity risk is present.
-
-### `vektor.execute(gate, signer)` → `VektorResult`
-
-Submits the PTB. If VektorLog is configured, appends the log call to the same PTB atomically.
-
-### `vektor.swap(params, signer)` → `VektorResult`
-
-Convenience method that runs guard → confirm → execute in one call.
+---
 
 ## Environment variables
 
-| Variable | Description |
-|---|---|
-| `VEKTORLOG_PACKAGE_ID` | Deployed VektorLog package ID (alternative to constructor option) |
+| Variable | Required | Description |
+|---|---|---|
+| `GROQ_API_KEY` | One of three | Groq API key (llama-3.3-70b) |
+| `ANTHROPIC_API_KEY` | One of three | Anthropic API key (Claude) |
+| `GEMINI_API_KEY` | One of three | Google Gemini API key |
+| `SUI_NETWORK` | Yes | `mainnet` or `testnet` |
+| `GOOGLE_CLIENT_ID` | Yes | OAuth 2.0 client ID for zkLogin |
+| `GOOGLE_CLIENT_SECRET` | Yes | OAuth 2.0 client secret |
+| `GOOGLE_REDIRECT_URI` | Yes | OAuth callback URL |
+| `SESSION_SECRET` | Yes | Express session encryption key |
+| `VEKTOR_FUNDING_KEY` | Optional | Sui private key for onboarding faucet |
+| `SUI_PRIVATE_KEY` | Optional | Server-side key for scheduled auto-execution |
+| `VEKTOR_KEY_ENCRYPTION_SECRET` | Optional | AES-256 key for Echo session key encryption |
+| `SMOKE_TEST_KEY` | Optional | Bypasses rate limits in integration tests |
 
-## SEAL integration (v1.5)
+---
 
-The PTB compiler contains a clearly marked placeholder where [Seal SDK](https://github.com/MystenLabs/seal) encryption will slot in to prevent front-running:
+## Deploying to Vercel
 
-```typescript
-// SEAL_V1.5 — encrypt intent here using Seal SDK before submission
-// to prevent front-running. See block comment above for integration notes.
+```bash
+npm install -g vercel
+vercel login
+vercel deploy --prod
 ```
 
-## Testing Vektor
+Set all environment variables in the Vercel dashboard or via CLI:
 
-### Try these in the chat
+```bash
+echo "your-groq-key" | vercel env add GROQ_API_KEY production
+```
 
-Plain-English intents the chat parses and routes. Replace token amounts or addresses freely.
+The `GOOGLE_REDIRECT_URI` must be updated to your Vercel domain and added as an authorised redirect URI in Google Cloud Console.
 
-- **Swap** — `swap 10 USDC for SUI`
-- **Swap (slippage preset)** — `swap 1 SUI to USDC with low slippage`
-- **Multilingual** — `troca 5 USDC por SUI` · `换 5 USDC 为 SUI`
-- **NAVI lend** — `deposit 5 SUI on NAVI`
-- **NAVI borrow** — `borrow 20 USDC against my SUI on NAVI`
-- **NAVI repay** — `repay 10 USDC on NAVI`
-- **DCA schedule** — `DCA $50 into SUI every week`
-- **One-shot scheduled swap** — `swap 100 USDC to SUI tomorrow at noon`
-- **Conditional order** — `sell half my SUI if SUI drops below $2`
-- **Conditional NAVI guard** — `repay my NAVI debt if health factor drops below 1.5`
-- **Add a contact** — `add Alice = 0xabc…123`
-- **Contact payment** — `send 5 USDC to Alice`
-- **Group / batch payment** — `pay rent: 30 USDC each to Alice, Bob, Charlie`
-- **Split payment** — `split 60 USDC three ways between Alice, Bob, Charlie`
-- **Balance** — `check my balance` · `how much USDC do I have`
-- **Price** — `what's the price of SUI`
-- **Portfolio analysis** — `analyse my wallet`
-- **Explain a transaction** — `explain tx 5kT…abc`
+---
 
-### Testing Echo (autonomous agent)
+## Guardian — risk classes
 
-Echo is one mode. It always watches portfolio + health factor + price triggers and runs rules. Each rule has an `autoExecute` flag — `true` runs autonomously within session-key limits, `false` pushes a one-tap proposal you confirm. The worker polls every 60 seconds, so triggers fire within a minute.
+Every transaction is evaluated before the user can sign.
 
-1. Open Echo from the sidebar and connect your wallet.
-2. **Create a session key** — Echo generates an ephemeral keypair, encrypts it with AES-256-GCM, stores it on Walrus, and returns an unsigned `SessionAuthorization` PTB.
-3. **Sign the authorization with your main wallet.** This caps per-tx and per-day spend on-chain. Default limits: $10k/tx, $50k/day; pass `maxPerTx` / `maxPerDay` (USDC base units) when creating to override.
-4. **Add a rule.** Examples:
-   - `never let my health factor drop below 1.5`
-   - `exit any memecoin down 25%`
-   - `always keep 100 USDC liquid`
-5. Toggle `autoExecute` on the rule. With it off: alerts + one-tap proposals. With it on: Echo executes via the session key inside the on-chain limits.
-6. **Revoke** any time from the session-key panel — that closes the on-chain SessionAuthorization and the encrypted key on Walrus is no longer usable.
+| Class | Trigger | Severity |
+|---|---|---|
+| `HIGH_PRICE_IMPACT` | Impact exceeds threshold | Block |
+| `LOOSE_SLIPPAGE` | Slippage warn >5%, block >20% | Warn / Block |
+| `STALE_QUOTE` | Quote TTL < 5 s remaining | Warn |
+| `THIN_LIQUIDITY` | Price impact >1% (shallow pool) | Warn |
+| `INSUFFICIENT_GAS` | SUI balance < trade + 2× gas estimate | Block |
+| `PROTOCOL_CONCENTRATION` | 100% routed through a single non-DeepBook AMM | Warn |
+| `LARGE_TRADE` | Trade size >$5,000 equivalent | Warn |
 
-### Testing /onboard
+A single `Block`-severity flag prevents execution. `Warn` flags require the user to acknowledge before proceeding.
 
-The `/onboard` flow ships testnet USDC from a dedicated funding wallet to a brand-new user — they don't need to own SUI to receive it.
+---
 
-1. In the chat: `/onboard a friend with $5` (defaults to $1 if no amount given).
-2. Copy the returned invite link.
-3. Open the link in an incognito window.
-4. Sign in with Google (zkLogin). The WelcomePage auto-claims as soon as it has your session address.
-5. Watch for the `✓ Your $5 has arrived.` confirmation and the on-chain digest.
+## Echo session key security model
 
-Funds come from `VEKTOR_FUNDING_KEY` (testnet only). The claim endpoint hard-enforces: USDC coin type only, exact `invite.amount` (capped at 50), only to the address passed in the request body, single use per invite, and rate-limited to 5/min/IP.
+1. Vektor generates an ephemeral Ed25519 keypair in the browser
+2. The private key is encrypted with AES-256-GCM (`VEKTOR_KEY_ENCRYPTION_SECRET`) and stored on Walrus
+3. The user signs an on-chain `SessionAuthorization` object with their main wallet — this sets `maxPerTx`, `maxPerDay`, and `expiresAt` enforced by the Move contract
+4. The session key can sign swaps autonomously up to those caps; anything exceeding them reverts on-chain
+5. Revoking from the Echo panel calls `session_auth::revoke` — the authorization is closed and the Walrus blob is effectively dead
+
+---
+
+## Project structure
+
+```
+src/
+  server.ts          — Express API (all routes)
+  parser/            — LLM intent parser + validator
+  guardian/          — Risk assessment (7 classes)
+  compiler/          — PTB builder
+  navi/              — NAVI Protocol client
+  echo/              — Session keys, rules, scoring
+  scheduler/         — Cron-based DCA + scheduled swaps
+  conditions/        — Price trigger monitor (Pyth)
+  alerts/            — Health factor + position monitor
+  memory/            — Per-wallet JSON memory store
+  db/                — Scheduled intents, contacts, positions
+  contacts/          — Contact book + group management
+  payments/          — Payment request links
+  portfolio/         — Sui RPC fetcher + transaction explainer
+  walrus/            — Walrus decentralised storage client
+  suins/             — SuiNS name resolution
+  ai/                — AI provider abstraction (Groq / Anthropic / Gemini)
+  ui/                — React frontend
+    App.tsx          — Main shell, chat, signing flows
+    LandingPage.tsx  — Public landing page
+    EchoPage.tsx     — Echo autonomous agent UI
+    Sidebar.tsx      — Portfolio, history, scheduled, watch, advice tabs
+    cards/           — SwapQuoteCard, TransactionReceiptCard, BundleReceiptCard, PermissionCard
+```
+
+---
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE)
