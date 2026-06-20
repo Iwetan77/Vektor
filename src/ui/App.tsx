@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useCurrentAccount, useDisconnectWallet, useSuiClientQuery, useSignAndExecuteTransaction } from '@mysten/dapp-kit'
 import { useAuthFetch } from './lib/authFetch.js'
+import { recordHistory, updateHistoryStatus } from './lib/history.js'
 import { isNeedResign } from './useZkLogin.js'
 import { Transaction } from '@mysten/sui/transactions'
 import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from '@mysten/sui/jsonRpc'
@@ -1373,6 +1374,16 @@ export default function App() {
 
       // Swap-type intents go through the Guardian flow
       const swapTypes = ['swap', 'compound', 'rebalance', 'risk_qualified', 'buy_memecoin', 'sell_memecoin', 'exit_at_profit', 'exit_at_loss', 'exit']
+
+      // Per-device history: log on-chain actions (localStorage). Starts 'pending';
+      // reportIntentStatus flips it to success/failed once signing completes.
+      const writeIntents = new Set([...swapTypes, 'send', 'transfer', 'lend', 'borrow', 'repay', 'batch_payment', 'split_payment', 'pay'])
+      if (writeIntents.has(intentType) && effectiveAddress) {
+        const histId = json.recordId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        json.recordId = histId // keep message + status-report on the same id
+        recordHistory(effectiveAddress, { id: histId, type: intentType, summary: trimmed, status: 'pending' })
+      }
+
       if (swapTypes.includes(intentType) && json.quote && json.report) {
         setMessages(prev => prev.map(m =>
           m.id === vektorMsgId
@@ -1554,6 +1565,7 @@ export default function App() {
     if (!effectiveAddress) return
     const recordId = messages.find(m => m.id === msgId)?.recordId
     if (!recordId) return
+    updateHistoryStatus(effectiveAddress, recordId, status) // per-device history (authoritative)
     try {
       await fetch('/api/intent-status', {
         method:  'POST',

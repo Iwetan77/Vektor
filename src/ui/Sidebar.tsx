@@ -4,6 +4,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useAuthFetch } from './lib/authFetch.js'
+import { loadHistory, HISTORY_EVENT } from './lib/history.js'
 
 interface ScheduledItem {
   id:       string
@@ -131,13 +132,18 @@ export function Sidebar({ wallet, portfolio, onRefresh, mobileOpen = false, onMo
     fetch(`/api/conditions/${wallet}`).then(r => r.json()).then(d => setConditions(d.conditions ?? [])).catch(() => {})
   }, [wallet, tab])
 
-  // Load intent history from memory API
+  // Intent history — read from per-device localStorage (server /tmp is ephemeral
+  // on serverless). Refresh live on history changes and when the window regains focus.
   useEffect(() => {
     if (!wallet) { setHistory([]); return }
-    fetch(`/api/memory/${wallet}`)
-      .then(r => r.json())
-      .then(d => setHistory(d.memory?.intentHistory ?? []))
-      .catch(() => {})
+    const refresh = () => setHistory(loadHistory(wallet))
+    refresh()
+    window.addEventListener(HISTORY_EVENT, refresh)
+    window.addEventListener('focus', refresh)
+    return () => {
+      window.removeEventListener(HISTORY_EVENT, refresh)
+      window.removeEventListener('focus', refresh)
+    }
   }, [wallet, tab])
 
   // Load advice log — what Vektor has recommended
