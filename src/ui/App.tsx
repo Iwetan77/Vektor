@@ -89,10 +89,12 @@ function ZkAvatarMenu({
   zkLogin,
   addrCopied,
   setAddrCopied,
+  portfolio,
 }: {
   zkLogin: ReturnType<typeof useZkLogin>
   addrCopied: boolean
   setAddrCopied: (v: boolean) => void
+  portfolio: any
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -115,12 +117,27 @@ function ZkAvatarMenu({
   const initial = (user.name ?? user.email ?? 'V').trim().charAt(0).toUpperCase()
   const addrShort = `${user.address.slice(0, 6)}…${user.address.slice(-4)}`
 
+  const hasBalance = portfolio != null && (portfolio.balances?.length > 0 || portfolio.totalUsd > 0)
+  const totalUsd = hasBalance ? `$${Number(portfolio.totalUsd).toFixed(2)}` : null
+
   return (
-    <div ref={ref} className="relative shrink-0">
+    <div ref={ref} className="relative shrink-0 flex items-center gap-1.5 md:gap-2">
+      {/* Combined wallet balance — every asset, shown on mobile + desktop */}
+      {totalUsd ? (
+        <div className="flex items-center gap-1.5 px-2.5 h-9 rounded-lg border border-white/10 bg-[#111118] text-xs md:text-sm font-mono text-slate-300 select-none">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+          <span>{totalUsd}</span>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1.5 px-2.5 h-9 rounded-lg border border-white/10 bg-[#111118]">
+          <span className="w-12 h-3 rounded bg-white/10 animate-pulse" />
+        </div>
+      )}
+
       <button
         onClick={() => setOpen(v => !v)}
         title={user.email ?? 'Account'}
-        className="flex items-center justify-center w-9 h-9 rounded-full bg-purple-600 hover:bg-purple-500 ring-1 ring-purple-400/30 transition-colors"
+        className="flex items-center justify-center w-9 h-9 rounded-full bg-purple-600 hover:bg-purple-500 ring-1 ring-purple-400/30 transition-colors shrink-0"
       >
         <span className="text-sm font-semibold text-white">{initial}</span>
       </button>
@@ -139,6 +156,16 @@ function ZkAvatarMenu({
               )}
               <div className="text-[10px] font-mono text-slate-600 mt-0.5">via Google · zkLogin</div>
             </div>
+          </div>
+
+          {/* Total balance — combined USD value of every asset */}
+          <div className="px-3 py-2.5 border-b border-white/5">
+            <div className="text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-1">Total balance</div>
+            {totalUsd ? (
+              <div className="text-lg font-semibold text-white">{totalUsd}</div>
+            ) : (
+              <div className="w-20 h-5 rounded bg-white/10 animate-pulse" />
+            )}
           </div>
 
           {/* Address */}
@@ -1935,7 +1962,7 @@ export default function App() {
               </svg>
             </button>
             {/* Google avatar — opens dropdown with address + copy + sign out */}
-            <ZkAvatarMenu zkLogin={zkLogin} addrCopied={addrCopied} setAddrCopied={setAddrCopied} />
+            <ZkAvatarMenu zkLogin={zkLogin} addrCopied={addrCopied} setAddrCopied={setAddrCopied} portfolio={portfolio} />
           </div>
         ) : (
           /* ── Not connected ─── */

@@ -295,13 +295,25 @@ function calcNextRun(spec: any): string {
 const ALLOWED_ORIGINS = (process.env.VEKTOR_ALLOWED_ORIGINS ?? 'http://localhost:5173')
   .split(',').map(s => s.trim()).filter(Boolean)
 
+function isAllowedOrigin(origin: string): boolean {
+  if (ALLOWED_ORIGINS.includes(origin)) return true
+  // Allow this app's own Vercel deployment(s) — production and preview URLs.
+  try {
+    const host = new URL(origin).hostname
+    if (host === 'localhost' || host === '127.0.0.1') return true
+    if (host.endsWith('.vercel.app')) return true
+  } catch { /* malformed origin → reject below */ }
+  return false
+}
+
 app.use(cors({
   origin: (origin, cb) => {
     // Allow same-origin/no-origin (curl, server-to-server) requests.
     if (!origin) return cb(null, true)
-    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true)
+    if (isAllowedOrigin(origin)) return cb(null, true)
     cb(new Error(`CORS: origin ${origin} not allowed`))
   },
+  credentials: true,
 }))
 app.use(express.json())
 
