@@ -1810,7 +1810,7 @@ export default function App() {
   // ── Auth gate: only zkLogin signs you into the app ───────────────────────
   // (Slush/wallet-connect is no longer a path in. Wait for /me probe so we
   //  don't flash the landing for a user who's already signed in via Google.)
-  if (!zkLogin.user && !zkLogin.loading) {
+  if (!zkLogin.user) {
     return <LandingPage />
   }
 

@@ -68,7 +68,8 @@ const FEATURES: Array<{ label: string; body: string }> = [
 
 /* ─── Landing ──────────────────────────────────────────────────────────── */
 export function LandingPage() {
-  const { signIn, loading } = useZkLogin()
+  const { signIn } = useZkLogin()
+  const [isSigningIn, setIsSigningIn] = useState(false)
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white antialiased overflow-x-hidden">
@@ -123,17 +124,19 @@ export function LandingPage() {
 
               <button
                 onClick={async () => {
+                  setIsSigningIn(true)
                   try { await signIn() }
                   catch (err) {
                     console.error('[LandingPage] signIn failed:', err)
                     alert('Sign-in failed: ' + (err instanceof Error ? err.message : String(err)))
+                    setIsSigningIn(false)
                   }
                 }}
-                disabled={loading}
+                disabled={isSigningIn}
                 className="w-full flex items-center justify-center gap-2.5 px-4 py-3.5 rounded-xl bg-white text-[#1a1a1a] font-semibold text-sm hover:bg-white/90 disabled:opacity-50 transition-colors min-h-[48px]"
               >
                 <GoogleG className="w-4 h-4 shrink-0" />
-                {loading ? 'Redirecting…' : 'Continue with Google'}
+                {isSigningIn ? 'Redirecting…' : 'Continue with Google'}
               </button>
 
               <ul className="text-xs text-slate-500 space-y-1.5 font-mono">
@@ -176,17 +179,19 @@ export function LandingPage() {
             <p className="text-sm text-slate-500">Ready when you are.</p>
             <button
               onClick={async () => {
+                setIsSigningIn(true)
                 try { await signIn() }
                 catch (err) {
                   console.error('[LandingPage] signIn failed:', err)
                   alert('Sign-in failed: ' + (err instanceof Error ? err.message : String(err)))
+                  setIsSigningIn(false)
                 }
               }}
-              disabled={loading}
+              disabled={isSigningIn}
               className="inline-flex items-center justify-center gap-2.5 px-6 py-3.5 rounded-xl bg-white text-[#1a1a1a] font-semibold text-sm hover:bg-white/90 disabled:opacity-50 transition-colors min-h-[48px]"
             >
               <GoogleG className="w-4 h-4 shrink-0" />
-              {loading ? 'Redirecting…' : 'Continue with Google'}
+              {isSigningIn ? 'Redirecting…' : 'Continue with Google'}
             </button>
           </div>
         </Reveal>
