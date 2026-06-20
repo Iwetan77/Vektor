@@ -1,4 +1,3 @@
-import Routex from 'routex-sui'
 import { runGuardian, type GuardianReportV2 } from './v2.js'
 
 const SIM_ADDR = '0x0000000000000000000000000000000000000000000000000000000000000001'
@@ -14,7 +13,9 @@ export async function rewritePTB(
   network:       'mainnet' | 'testnet' = 'mainnet',
 ): Promise<GuardianReportV2> {
   const original = report.originalQuote
-  const routex   = new Routex(network, walletAddress || SIM_ADDR)
+  // Lazy-load Routex to avoid Vercel startup crash (cetus-sdk CJS requires ESM @mysten/sui)
+  const { default: RoutexClass } = await import('routex-sui')
+  const routex   = new (RoutexClass as any)(network, walletAddress || SIM_ADDR)
 
   // originalQuote may come back from the client with different shapes depending
   // on whether BigInt fields survived JSON round-trip.  Normalise defensively.

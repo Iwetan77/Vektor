@@ -20,7 +20,15 @@ import express          from 'express'
 import cors             from 'cors'
 import rateLimit         from 'express-rate-limit'
 import multer           from 'multer'
-import Routex           from 'routex-sui'
+// routex-sui is lazy-loaded to avoid startup crash on Vercel (cetus-sdk CJS requires ESM @mysten/sui)
+let _RoutexClass: (new (network: string) => any) | null = null
+async function loadRoutex() {
+  if (!_RoutexClass) {
+    const mod = await import('routex-sui')
+    _RoutexClass = mod.default as new (network: string) => any
+  }
+  return _RoutexClass
+}
 import { complete, activeProvider, LANG_NAMES, SUPPORTED_LANGS } from './ai/client.js'
 import {
   loadContacts, addContact, removeContact, listContacts, lookupContact,
@@ -100,11 +108,12 @@ const QUOTE_MS = 18_000
 //
 // Memoized by network because `setNetwork(network)` is called in the
 // constructor and would mutate global state if we mixed networks.
-const routexCache = new Map<'mainnet', Routex>()
-function createRoutex(network: 'mainnet', _sender: string) {
+const routexCache = new Map<string, any>()
+async function createRoutex(network: 'mainnet', _sender: string) {
   let cached = routexCache.get(network)
   if (!cached) {
-    cached = new Routex(network)
+    const RoutexClass = await loadRoutex()
+    cached = new RoutexClass(network)
     routexCache.set(network, cached)
   }
   return cached
@@ -1174,7 +1183,7 @@ app.post('/api/intent', async (req, res) => {
       const amount     = parsed.input_amount ?? 0
       const amountIn   = toBaseUnits(amount, fromToken)
 
-      const routex  = createRoutex('mainnet', sender)
+      const routex  = await createRoutex('mainnet', sender)
       const quote   = await Promise.race([
         routex.getQuote({
           from:              fromToken,
@@ -1309,7 +1318,7 @@ app.post('/api/intent', async (req, res) => {
     // Prevents front-running by keeping intent private until execution moment
     // Do not implement now. Reserved for v1.5.
 
-    const routex = createRoutex('mainnet', sender)
+    const routex = await createRoutex('mainnet', sender)
     const quote  = await Promise.race([
       routex.getQuote({
         from:              fromToken,
@@ -1804,7 +1813,7 @@ app.post('/api/execute-scheduled/:id', requireWalletSigOrZkLogin({
     const toToken = (scheduled.targetToken ?? scheduled.intent?.output_goal ?? 'USDC').toUpperCase()
 
     const amountIn = toBaseUnits(amount, fromToken)
-    const routex   = createRoutex('mainnet', sender)
+    const routex   = await createRoutex('mainnet', sender)
     const quote    = await Promise.race([
       routex.getQuote({
         from:              fromToken,
@@ -1857,7 +1866,7 @@ app.post('/api/ptb', async (req, res) => {
     if (!from || !to || !amountIn || !sender) {
       res.status(400).json({ ok: false, error: 'Missing required fields' }); return
     }
-    const routex = createRoutex('mainnet', sender)
+    const routex = await createRoutex('mainnet', sender)
     const quote  = await Promise.race([
       routex.getQuote({
         from,
@@ -2473,7 +2482,7 @@ app.post('/api/echo/:wallet/execute', requireWalletSigOrWorkerSecret(), async (r
     const sessionAddr = keypair.getPublicKey().toSuiAddress()
 
     const amountIn = toBaseUnits(amount, fromToken)
-    const routex   = createRoutex('mainnet', sessionAddr)
+    const routex   = await createRoutex('mainnet', sessionAddr)
     const quote    = await Promise.race([
       routex.getQuote({
         from:              fromToken,
