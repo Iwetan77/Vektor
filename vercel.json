@@ -4,8 +4,7 @@
   "outputDirectory": "dist-ui",
   "functions": {
     "api/index.ts": {
-      "maxDuration": 30,
-      "runtime": "nodejs22.x"
+      "maxDuration": 30
     }
   },
   "rewrites": [
