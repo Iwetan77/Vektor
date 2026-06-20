@@ -170,6 +170,9 @@ function stripMarkdown(s: string): string {
 
 const TOKEN_DECIMALS: Record<string, number> = {
   SUI: 1e9, USDC: 1e6, USDT: 1e6, DEEP: 1e6, WETH: 1e8, WBTC: 1e8, BUCK: 1e9,
+  // Sui ecosystem tokens (added to registry as routex-sui gains support)
+  WAL: 1e9, AUSD: 1e6, NAVX: 1e9, HASUI: 1e9, AFSUI: 1e9, VSUI: 1e9, HAWAL: 1e9,
+  LOFI: 1e9, BLUB: 1e9, HIPPO: 1e9, OCEAN: 1e9, BONK: 1e5, MEME: 1e9,
 }
 
 // Coin type addresses for batch payments
@@ -494,8 +497,8 @@ app.post('/api/intent', async (req, res) => {
     // "swap X to TOKEN" or "swap X for TOKEN" with a transfer. Reclassify as swap.
     const KNOWN_TOKEN_SYMBOLS = new Set([
       'SUI', 'USDC', 'USDT', 'WETH', 'WBTC', 'DEEP',
-      'AFSUI', 'HASUI', 'VSUI', 'BUCK',
-      'LOFI', 'BLUB', 'OCEAN', 'HIPPO', 'BONK', 'MEME',
+      'AFSUI', 'HASUI', 'VSUI', 'BUCK', 'WAL', 'HAWAL',
+      'AUSD', 'NAVX', 'LOFI', 'BLUB', 'OCEAN', 'HIPPO', 'BONK', 'MEME',
     ])
     if (parsed.intent_type === 'send' || parsed.intent_type === 'contact_payment') {
       const target = (
@@ -1359,18 +1362,38 @@ app.post('/api/intent', async (req, res) => {
     // Do not implement now. Reserved for v1.5.
 
     const routex = await createRoutex('mainnet', sender)
-    const quote  = await Promise.race([
-      routex.getQuote({
-        from:              fromToken,
-        to:                toToken,
-        amount:            amountIn,
-        slippageTolerance: parsed.constraints.max_slippage ?? 0.005,
-        senderAddress:     sender,
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Quote timed out — try again in a moment.')), QUOTE_MS)
-      ),
-    ])
+    let quote: any
+    try {
+      quote = await Promise.race([
+        routex.getQuote({
+          from:              fromToken,
+          to:                toToken,
+          amount:            amountIn,
+          slippageTolerance: parsed.constraints.max_slippage ?? 0.005,
+          senderAddress:     sender,
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Quote timed out — try again in a moment.')), QUOTE_MS)
+        ),
+      ])
+    } catch (qErr: any) {
+      const msg: string = qErr?.message ?? String(qErr)
+      // Routex throws "Unknown token: X. Supported: ..." for tokens not yet in its registry.
+      // Surface a friendly error instead of leaking SDK internals.
+      if (msg.startsWith('Unknown token:')) {
+        const unsupported = msg.split('.')[0].replace('Unknown token: ', '')
+        const errEn = `${unsupported} can't be swapped directly yet — it's not in the routing engine's registry. ` +
+          `Supported tokens: SUI, USDC, USDT, WETH, WBTC, DEEP, BUCK, AUSD, NAVX, HASUI, AFSUI. ` +
+          `For other tokens (WAL, memecoins), routing support is added as the SDK is updated.`
+        const errMsg = lang === 'en' ? errEn : await complete({
+          system: 'You are Vektor. Translate this error message, keeping all token symbols unchanged.',
+          prompt: errEn, maxTokens: 120, lang,
+        }).catch(() => errEn)
+        res.json({ ok: false, error: errMsg, language: lang })
+        return
+      }
+      throw qErr
+    }
 
     // Guard: Routex silently returns an empty Transaction when buildFromRoute fails.
     // Detect it here — before Guardian — so the user never sees a confirmable
