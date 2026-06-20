@@ -7,7 +7,9 @@ import fs             from 'fs'
 import path           from 'path'
 import { randomUUID } from 'crypto'
 
-const MEMORY_DIR = path.resolve(process.cwd(), 'data/memory')
+const MEMORY_DIR = process.env.VERCEL
+  ? '/tmp/vektor-data/memory'
+  : path.resolve(process.cwd(), 'data/memory')
 
 export interface UserAlert {
   id:        string

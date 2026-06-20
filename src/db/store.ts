@@ -9,7 +9,8 @@ import path from 'path'
 import { v4 as uuid } from 'uuid'
 import type { ParsedIntent } from '../parser/types.js'
 
-const DATA_FILE = path.resolve(process.cwd(), 'data/store.json')
+const DATA_BASE = process.env.VERCEL ? '/tmp/vektor-data' : path.resolve(process.cwd(), 'data')
+const DATA_FILE = path.join(DATA_BASE, 'store.json')
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
 

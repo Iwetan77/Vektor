@@ -2565,20 +2565,24 @@ app.get('/api/health', (_, res) => {
   res.json({ ok: true, version: '2.1.0', features: ['guardian', 'navi', 'dca', 'conditions', 'memory', 'alerts', 'contacts', 'voice', 'echo'] })
 })
 
-/* ─── Start ───────────────────────────────────────────────────────────── */
+/* ─── Start (skip in serverless environments) ─────────────────────────── */
 
-app.listen(PORT, () => {
-  console.log(`\n  ⚡ Vektor OS  →  http://localhost:${PORT}`)
-  console.log(`  Features    →  Guardian · NAVI · DCA · Conditions · Memory · Alerts`)
-  try {
-    const p = activeProvider()
-    const label = p === 'anthropic' ? 'Claude (claude-sonnet-4)' : p === 'groq' ? 'Groq (llama-3.3-70b)' : 'Gemini (gemini-2.0-flash)'
-    console.log(`  AI parser   →  ${label}\n`)
-  } catch {
-    console.log(`  AI parser   →  ⚠️  No API key set (ANTHROPIC_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY)\n`)
-  }
+export default app
 
-  startScheduler()
-  startConditionMonitor()
-  startAlertMonitor()
-})
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`\n  ⚡ Vektor OS  →  http://localhost:${PORT}`)
+    console.log(`  Features    →  Guardian · NAVI · DCA · Conditions · Memory · Alerts`)
+    try {
+      const p = activeProvider()
+      const label = p === 'anthropic' ? 'Claude (claude-sonnet-4)' : p === 'groq' ? 'Groq (llama-3.3-70b)' : 'Gemini (gemini-2.0-flash)'
+      console.log(`  AI parser   →  ${label}\n`)
+    } catch {
+      console.log(`  AI parser   →  ⚠️  No API key set (ANTHROPIC_API_KEY, GROQ_API_KEY, or GEMINI_API_KEY)\n`)
+    }
+
+    startScheduler()
+    startConditionMonitor()
+    startAlertMonitor()
+  })
+}
