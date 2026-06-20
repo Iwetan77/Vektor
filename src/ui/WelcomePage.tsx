@@ -102,8 +102,12 @@ export function WelcomePage({
     })
       .then(r => r.json())
       .then(d => {
-        if (d.ok && d.digest) setClaim({ state: 'done', digest: d.digest, amount: d.amount })
-        else setClaim({ state: 'error', error: d.error ?? 'claim failed' })
+        if (d.ok && d.digest) {
+          localStorage.removeItem('pending-invite')
+          setClaim({ state: 'done', digest: d.digest, amount: d.amount })
+        } else {
+          setClaim({ state: 'error', error: d.error ?? 'claim failed' })
+        }
       })
       .catch(e => setClaim({ state: 'error', error: e instanceof Error ? e.message : String(e) }))
   }, [token, invite, recipient, claim.state])

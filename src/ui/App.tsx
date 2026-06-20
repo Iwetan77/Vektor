@@ -1118,8 +1118,13 @@ export default function App() {
     setWalletOpen(false)
   }
 
-  // Detect ?invite=TOKEN — show the WelcomePage until dismissed
-  const inviteToken = new URLSearchParams(window.location.search).get('invite') ?? undefined
+  // Detect ?invite=TOKEN — show the WelcomePage until dismissed.
+  // Also restore from localStorage: Google OAuth does a full-page redirect, which
+  // wipes the ?invite= param from the URL. We save it before the redirect so the
+  // claim can still fire after the OAuth callback reloads the page.
+  const urlInviteToken  = new URLSearchParams(window.location.search).get('invite') ?? null
+  const storedInviteToken = typeof window !== 'undefined' ? localStorage.getItem('pending-invite') : null
+  const inviteToken     = (urlInviteToken ?? storedInviteToken) || undefined
   const [showWelcome, setShowWelcome] = useState(() => !!inviteToken)
 
   const [connectOpen,     setConnectOpen]     = useState(false)
@@ -1820,13 +1825,18 @@ export default function App() {
           setConnectOpen(open)
           if (!open && account) setShowWelcome(false)
         }}
-        onZkLogin={async () => { await zkLogin.signIn(); setShowWelcome(false) }}
+        onZkLogin={async () => {
+          // Save token before OAuth redirect wipes the URL
+          if (inviteToken) localStorage.setItem('pending-invite', inviteToken)
+          await zkLogin.signIn()
+          setShowWelcome(false)
+        }}
         zkAvailable={true}
         // After Google sign-in, this address is the user's new zkLogin Sui wallet —
         // WelcomePage's auto-claim effect will POST /api/onboard/:token/claim with it.
         signedInAddress={zkLogin.user?.address ?? null}
         onEnterApp={() => {
-          // Clean the invite token from the URL and proceed
+          localStorage.removeItem('pending-invite')
           window.history.replaceState({}, '', window.location.pathname)
           setShowWelcome(false)
         }}
