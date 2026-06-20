@@ -1,4 +1,4 @@
-import { runGuardian, type GuardianReportV2 } from './v2.js'
+import { runGuardian, stripQuoteForJson, type GuardianReportV2 } from './v2.js'
 
 const SIM_ADDR = '0x0000000000000000000000000000000000000000000000000000000000000001'
 
@@ -42,7 +42,7 @@ export async function rewritePTB(
           _split: true,
         }
         const newReport = await runGuardian(merged, walletAddress, null)
-        return { ...newReport, rewrittenQuote: merged }
+        return { ...newReport, rewrittenQuote: stripQuoteForJson(merged) }
       }
 
       case 'reroute': {
@@ -59,7 +59,7 @@ export async function rewritePTB(
             ...(flaggedProtocol ? { excludeProtocols: [flaggedProtocol] } : {}),
           })
           const newReport = await runGuardian(newQuote, walletAddress, null)
-          return { ...newReport, rewrittenQuote: newQuote }
+          return { ...newReport, rewrittenQuote: stripQuoteForJson(newQuote) }
         } catch (err: any) {
           if (err?.message?.includes('No route found') || err?.message?.includes('timed out')) {
             // Only one viable path exists — fall through to return original report
@@ -77,11 +77,11 @@ export async function rewritePTB(
           slippageTolerance: slippage,
         })
         const newReport = await runGuardian(newQuote, walletAddress, null)
-        return { ...newReport, rewrittenQuote: newQuote }
+        return { ...newReport, rewrittenQuote: stripQuoteForJson(newQuote) }
       }
     }
   }
 
-  // No suggestions — return a re-evaluated fresh quote
+  // No suggestions — return a re-evaluated fresh quote (originalQuote is already stripped)
   return { ...report, rewrittenQuote: original }
 }

@@ -27,6 +27,28 @@ export interface GuardianReportV2 {
   rewrittenQuote?:  any
 }
 
+/**
+ * Strip a raw Routex quote down to the plain-object fields that the UI and
+ * rewritePTB actually need. Removes the `ptb` Transaction class instance
+ * (which contains BigInts in non-enumerable class fields that trip JSON.stringify)
+ * and normalises all BigInt amount fields to decimal strings.
+ */
+export function stripQuoteForJson(quote: any): any {
+  const str = (v: unknown) => (v == null ? '0' : String(v))
+  return {
+    fromSymbol:        quote.fromSymbol  ?? quote.from?.symbol  ?? '',
+    toSymbol:          quote.toSymbol    ?? quote.to?.symbol    ?? '',
+    amountIn:          str(quote.amountIn),
+    amountOut:         str(quote.amountOut),
+    slippageTolerance: quote.slippageTolerance ?? 0.005,
+    priceImpact:       quote.priceImpact       ?? 0,
+    gasEstimate:       str(quote.gasEstimate),
+    validUntil:        quote.validUntil,
+    route:             (quote.route ?? []).map((s: any) => ({ protocol: s.protocol, poolId: s.poolId })),
+    _split:            quote._split,
+  }
+}
+
 // ─── Pyth price feed IDs for Sui ─────────────────────────────────────────────
 
 const PYTH_ENDPOINT = 'https://hermes.pyth.network'
@@ -272,6 +294,6 @@ export async function runGuardian(
     flags:            localizedFlags,
     canProceed:       level !== 'CRITICAL',
     rewriteAvailable: flags.some(f => f.severity !== 'green' && f.suggestion != null),
-    originalQuote:    quote,
+    originalQuote:    stripQuoteForJson(quote),
   }
 }
