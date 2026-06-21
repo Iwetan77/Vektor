@@ -228,13 +228,19 @@ function buildRewriteLabel(quote: any, report: any): string {
 
 /* ─── Multi-step prompt chaining ─────────────────────────────────────────── *
  * Splits "swap all my WAL for SUI then send it to ebube" into ordered raw-text
- * steps on "then" / "and then" / "after that". A single-step prompt (the
- * overwhelming common case) returns its own text unchanged in a 1-length array
- * so callers can branch on `.length > 1` without a separate code path. */
+ * steps on "then" / "and then" / "after that" / a bare "and" immediately
+ * followed by a new action verb ("...USDC and send 10% to Ebube"). The verb
+ * lookahead keeps this narrow — "swap SUI and USDC" (one action, two tokens)
+ * never matches since "and" there isn't followed by an action verb. A
+ * single-step prompt (the overwhelming common case) returns its own text
+ * unchanged in a 1-length array so callers can branch on `.length > 1`
+ * without a separate code path. */
 function splitChainSteps(text: string): string[] {
-  const parts = text.split(/\s*,?\s*(?:and\s+)?then\b\s*|\s*,?\s*after\s+that\b\s*/i)
-    .map(s => s.trim())
-    .filter(Boolean)
+  const ACTION_VERBS = '(?:send|pay|transfer|swap|lend|borrow|repay|deposit|withdraw)'
+  const parts = text.split(new RegExp(
+    `\\s*,?\\s*(?:and\\s+)?then\\b\\s*|\\s*,?\\s*after\\s+that\\b\\s*|\\s+and\\s+(?=${ACTION_VERBS}\\b)`,
+    'i',
+  )).map(s => s.trim()).filter(Boolean)
   return parts.length > 1 ? parts : [text]
 }
 
@@ -753,6 +759,19 @@ function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, on
 
       {!msg.loading && (() => {
         const it = msg.intentType
+
+        // Swap / Guardian flow — execution failed. Without this check, a
+        // deterministic failure (e.g. the DEX route fails to build) just
+        // silently re-showed the exact same review card with the exact same
+        // params on every Confirm click, with the error nowhere visible —
+        // looking like the swap popup "wouldn't go away" no matter what you did.
+        if (msg.guardData && msg.executionError) return (
+          <div className="rounded-xl border border-red-500/25 bg-red-500/5 px-6 py-5 space-y-2">
+            <div className="flex items-center gap-2"><span className="text-red-400">✕</span><span className="text-white font-semibold text-sm">Swap failed</span></div>
+            <p className="text-xs text-red-300/70">{msg.executionError}</p>
+            <p className="text-[10px] text-slate-600">Send the swap again as a new message to get a fresh quote.</p>
+          </div>
+        )
 
         // Swap / Guardian flow
         if (msg.guardData && msg.phase !== 'confirmed') return (
@@ -2154,15 +2173,22 @@ export default function App() {
       setTimeout(refreshPortfolio, 3000)
       return { ok: true }
     } catch (err: any) {
-      const errMsg = err.message ?? 'Execution failed.'
-      const label = isNeedResign(err) ? '· RE-SIGNING IN…' : '· ERROR'
+      const errMsg   = err.message ?? 'Execution failed.'
+      const resigning = isNeedResign(err)
+      const label = resigning ? '· RE-SIGNING IN…' : '· ERROR'
       setMessages(prev => prev.map(m =>
         m.id === msgId ? {
           ...m,
           loading:     false,
+          // Re-signing is a mid-flow Google round-trip, not a real failure —
+          // keep the review card so execution can resume after it. A real
+          // failure (e.g. the DEX route failed to build) gets a terminal
+          // "Swap failed" card instead of silently re-showing the same
+          // review card with the same params, which just looked like an
+          // unkillable popup with no indication anything had gone wrong.
           phase:       'review' as const,
           actionLabel: label,
-          text:        errMsg,
+          executionError: resigning ? undefined : errMsg,
         } : m,
       ))
       if (!isNeedResign(err)) void reportIntentStatus(msgId, 'failed')
