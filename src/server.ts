@@ -1020,21 +1020,37 @@ app.post('/api/intent', async (req, res) => {
 
     if (intent === 'batch_payment' || intent === 'split_payment') {
       const token     = (parsed.input_asset ?? 'USDC').toUpperCase()
-      const amount    = parsed.input_amount ?? 0
-      const groupName = (parsed as any).group_name as string | null ?? ''
+      // Safety net: the LLM occasionally "helps" by pre-multiplying input_amount
+      // by the group's member count even though the contract is "amount per
+      // person" (or pre-dividing for split). Trust the literal number the user
+      // actually typed over whatever math the model may have silently applied.
+      const literalAmount = text.match(/(\d+(?:\.\d+)?)/)?.[1]
+      const amount    = literalAmount ? parseFloat(literalAmount) : (parsed.input_amount ?? 0)
+      const rawGroupName = ((parsed as any).group_name as string | null) ?? ''
       const isSplit   = intent === 'split_payment' || (parsed as any).per_person === false
       const perPerson = !isSplit
 
-      if (!groupName) {
+      if (!rawGroupName) {
         res.json({ ok: false, error: 'Which group should receive this payment? (e.g. "my staff")', language: lang }); return
       }
 
-      const members = sender !== SIM_ADDR
-        ? await resolveGroupMembers(sender, groupName).catch(() => null)
-        : null
+      // The parser sometimes includes a leading possessive ("my staff") in
+      // group_name even though groups are stored without it ("staff"). Try the
+      // literal name first, then fall back to stripping "my "/"our " prefixes.
+      const groupNameCandidates = [rawGroupName, rawGroupName.replace(/^(my|our)\s+/i, '')]
+        .filter((v, i, arr) => v && arr.indexOf(v) === i)
+
+      let groupName = rawGroupName
+      let members: { name: string; address: string }[] | null = null
+      if (sender !== SIM_ADDR) {
+        for (const candidate of groupNameCandidates) {
+          const resolved = await resolveGroupMembers(sender, candidate).catch(() => null)
+          if (resolved && resolved.length > 0) { members = resolved; groupName = candidate; break }
+        }
+      }
 
       if (!members || members.length === 0) {
-        const notFoundEn = `I don't have a group called "${groupName}". Create one with: /group create "${groupName}" with Alice, Bob`
+        const notFoundEn = `I don't have a group called "${rawGroupName}". Create one with: /group create "${rawGroupName}" with Alice, Bob`
         const notFoundMsg = lang === 'en' ? notFoundEn : await complete({
           system: 'You are Vektor. Translate this message exactly.',
           prompt: notFoundEn, maxTokens: 100, lang,

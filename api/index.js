@@ -423389,17 +423389,30 @@ ${group.members.map((m) => `\u2022 ${m.name} \u2014 ${m.address.slice(0, 10)}\u2
     }
     if (intent === "batch_payment" || intent === "split_payment") {
       const token = (parsed.input_asset ?? "USDC").toUpperCase();
-      const amount = parsed.input_amount ?? 0;
-      const groupName = parsed.group_name ?? "";
+      const literalAmount = text.match(/(\d+(?:\.\d+)?)/)?.[1];
+      const amount = literalAmount ? parseFloat(literalAmount) : parsed.input_amount ?? 0;
+      const rawGroupName = parsed.group_name ?? "";
       const isSplit = intent === "split_payment" || parsed.per_person === false;
       const perPerson = !isSplit;
-      if (!groupName) {
+      if (!rawGroupName) {
         res.json({ ok: false, error: 'Which group should receive this payment? (e.g. "my staff")', language: lang });
         return;
       }
-      const members = sender !== SIM_ADDR2 ? await resolveGroupMembers(sender, groupName).catch(() => null) : null;
+      const groupNameCandidates = [rawGroupName, rawGroupName.replace(/^(my|our)\s+/i, "")].filter((v, i, arr) => v && arr.indexOf(v) === i);
+      let groupName = rawGroupName;
+      let members = null;
+      if (sender !== SIM_ADDR2) {
+        for (const candidate of groupNameCandidates) {
+          const resolved = await resolveGroupMembers(sender, candidate).catch(() => null);
+          if (resolved && resolved.length > 0) {
+            members = resolved;
+            groupName = candidate;
+            break;
+          }
+        }
+      }
       if (!members || members.length === 0) {
-        const notFoundEn = `I don't have a group called "${groupName}". Create one with: /group create "${groupName}" with Alice, Bob`;
+        const notFoundEn = `I don't have a group called "${rawGroupName}". Create one with: /group create "${rawGroupName}" with Alice, Bob`;
         const notFoundMsg = lang === "en" ? notFoundEn : await complete({
           system: "You are Vektor. Translate this message exactly.",
           prompt: notFoundEn,
