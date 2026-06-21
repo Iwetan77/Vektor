@@ -170,9 +170,10 @@ function stripMarkdown(s: string): string {
 
 const TOKEN_DECIMALS: Record<string, number> = {
   SUI: 1e9, USDC: 1e6, USDT: 1e6, DEEP: 1e6, WETH: 1e8, WBTC: 1e8, BUCK: 1e9,
-  // Sui ecosystem tokens (added to registry as routex-sui gains support)
-  WAL: 1e9, AUSD: 1e6, NAVX: 1e9, HASUI: 1e9, AFSUI: 1e9, VSUI: 1e9, HAWAL: 1e9,
-  LOFI: 1e9, BLUB: 1e9, HIPPO: 1e9, OCEAN: 1e9, BONK: 1e5, MEME: 1e9,
+  // Sui ecosystem tokens — match routex-sui@1.4.2's MAINNET_TOKENS registry exactly
+  WAL: 1e9, AUSD: 1e6, NAVX: 1e9, HASUI: 1e9, AFSUI: 1e9, VSUI: 1e9, STSUI: 1e9, HAWAL: 1e9,
+  NS: 1e6, SEND: 1e6, CETUS: 1e9, TURBOS: 1e9, FLX: 1e8, SCA: 1e9, BLUE: 1e9, SUIP: 1e9,
+  LOFI: 1e9, BLUB: 100, HIPPO: 1e9, FUD: 1e5, OCEAN: 1e9, BONK: 1e5, MEME: 1e9,
 }
 
 // Coin type addresses for batch payments
@@ -497,8 +498,9 @@ app.post('/api/intent', async (req, res) => {
     // "swap X to TOKEN" or "swap X for TOKEN" with a transfer. Reclassify as swap.
     const KNOWN_TOKEN_SYMBOLS = new Set([
       'SUI', 'USDC', 'USDT', 'WETH', 'WBTC', 'DEEP',
-      'AFSUI', 'HASUI', 'VSUI', 'BUCK', 'WAL', 'HAWAL',
-      'AUSD', 'NAVX', 'LOFI', 'BLUB', 'OCEAN', 'HIPPO', 'BONK', 'MEME',
+      'AFSUI', 'HASUI', 'VSUI', 'STSUI', 'BUCK', 'WAL', 'HAWAL',
+      'AUSD', 'NAVX', 'NS', 'SEND', 'CETUS', 'TURBOS', 'FLX', 'SCA', 'BLUE', 'SUIP',
+      'LOFI', 'BLUB', 'OCEAN', 'HIPPO', 'FUD', 'BONK', 'MEME',
     ])
     if (parsed.intent_type === 'send' || parsed.intent_type === 'contact_payment') {
       const target = (
@@ -1398,8 +1400,9 @@ app.post('/api/intent', async (req, res) => {
       if (msg.startsWith('Unknown token:')) {
         const unsupported = msg.split('.')[0].replace('Unknown token: ', '')
         const errEn = `${unsupported} can't be swapped directly yet — it's not in the routing engine's registry. ` +
-          `Supported tokens: SUI, USDC, USDT, WETH, WBTC, DEEP, BUCK, AUSD, NAVX, HASUI, AFSUI. ` +
-          `For other tokens (WAL, memecoins), routing support is added as the SDK is updated.`
+          `Supported tokens: SUI, USDC, USDT, WETH, WBTC, DEEP, BUCK, AUSD, NAVX, HASUI, AFSUI, VSUI, STSUI, WAL, ` +
+          `NS, SEND, CETUS, TURBOS, FLX, SCA, BLUE, SUIP, FUD, LOFI, HIPPO, BLUB. ` +
+          `Routing support for other tokens is added as the SDK is updated.`
         const errMsg = lang === 'en' ? errEn : await complete({
           system: 'You are Vektor. Translate this error message, keeping all token symbols unchanged.',
           prompt: errEn, maxTokens: 120, lang,

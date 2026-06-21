@@ -50,7 +50,7 @@
     "navi-sdk": "^1.7.3",
     "node-cron": "^4.2.1",
     "openai": "^6.39.1",
-    "routex-sui": "^1.3.3",
+    "routex-sui": "^1.4.2",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

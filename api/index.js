@@ -295706,8 +295706,17 @@ __export(dist_exports3, {
   default: () => index_default,
   getTokenBySymbol: () => getTokenBySymbol,
   resolveToken: () => resolveToken,
+  resolveTokenAsync: () => resolveTokenAsync,
   setDebug: () => setDebug
 });
+function setDebug(on) {
+  debugEnabled = on;
+}
+function debugWarn(scope, msg, err) {
+  if (!debugEnabled) return;
+  const tail = err ? `: ${err instanceof Error ? err.message : String(err)}` : "";
+  console.warn(`[routex-sui] ${scope} ${msg}${tail}`);
+}
 function normalizeCoinType2(type) {
   try {
     return normalizeStructTag(type);
@@ -295719,15 +295728,73 @@ function coinTypesEqual(a, b) {
   return normalizeCoinType2(a) === normalizeCoinType2(b);
 }
 function setNetwork(network) {
+  activeNetwork = network;
   tokenRegistry = network === "mainnet" ? MAINNET_TOKENS : TESTNET_TOKENS;
 }
-function resolveToken(symbolOrType) {
+function looksLikeStructType(s) {
+  return s.startsWith("0x") && s.split("::").length === 3;
+}
+function getMetadataClient() {
+  if (!metadataClient || metadataClient.network !== activeNetwork) {
+    metadataClient = {
+      client: new SuiJsonRpcClient({ url: getJsonRpcFullnodeUrl(activeNetwork), network: activeNetwork }),
+      network: activeNetwork
+    };
+  }
+  return metadataClient.client;
+}
+async function resolveTokenAsync(symbolOrType) {
+  const sync = tryResolveSync(symbolOrType);
+  if (sync) return sync;
+  if (looksLikeStructType(symbolOrType)) {
+    const normalized = normalizeCoinType2(symbolOrType);
+    const cached = onChainTokenCache.get(normalized);
+    if (cached) return cached;
+    try {
+      const meta = await getMetadataClient().getCoinMetadata({ coinType: normalized });
+      if (!meta) {
+        throw new Error(
+          `Coin type "${symbolOrType}" has no on-chain CoinMetadata. The type may not exist or its CoinMetadata object was not published.`
+        );
+      }
+      const decimals = meta.decimals;
+      const token = {
+        address: normalized.split("::")[0],
+        type: normalized,
+        symbol: meta.symbol,
+        decimals,
+        name: meta.name || meta.symbol,
+        scalar: 10 ** decimals
+      };
+      onChainTokenCache.set(normalized, token);
+      return token;
+    } catch (err) {
+      debugWarn("resolveTokenAsync", `getCoinMetadata(${normalized}) failed`, err);
+      throw new Error(
+        `Failed to fetch CoinMetadata for "${symbolOrType}": ` + (err instanceof Error ? err.message : String(err))
+      );
+    }
+  }
+  throw new Error(
+    `Unknown token: "${symbolOrType}". Pass a registry symbol (${Object.keys(tokenRegistry).join(", ")}) or a full Move type like 0x356a...::wal::WAL.`
+  );
+}
+function tryResolveSync(symbolOrType) {
   const upper = symbolOrType.toUpperCase();
   if (tokenRegistry[upper]) return tokenRegistry[upper];
   for (const token of Object.values(tokenRegistry)) {
-    if (token.type === symbolOrType || token.address === symbolOrType) return token;
+    if (token.type === symbolOrType || token.address === symbolOrType || coinTypesEqual(token.type, symbolOrType)) {
+      return token;
+    }
   }
-  throw new Error(`Unknown token: ${symbolOrType}. Supported: ${Object.keys(tokenRegistry).join(", ")}`);
+  return null;
+}
+function resolveToken(symbolOrType) {
+  const found = tryResolveSync(symbolOrType);
+  if (found) return found;
+  throw new Error(
+    `Unknown token: ${symbolOrType}. Supported registry symbols: ${Object.keys(tokenRegistry).join(", ")}. For arbitrary Sui coin types pass the full Move type to getQuote() \u2014 routex resolves on-chain CoinMetadata automatically.`
+  );
 }
 function getTokenBySymbol(symbol) {
   return tokenRegistry[symbol.toUpperCase()] ?? null;
@@ -295735,21 +295802,13 @@ function getTokenBySymbol(symbol) {
 function fromBaseUnits(amount, token) {
   return Number(amount) / token.scalar;
 }
-function setDebug(on) {
-  debugEnabled = on;
-}
-function debugWarn(scope, msg, err) {
-  if (!debugEnabled) return;
-  const tail = err ? `: ${err instanceof Error ? err.message : String(err)}` : "";
-  console.warn(`[routex-sui] ${scope} ${msg}${tail}`);
-}
 function safe(p) {
   return p.catch(() => null);
 }
 function applySlippage(amount, slippage) {
   return BigInt(Math.floor(Number(amount) * (1 - slippage)));
 }
-var import_cetus_sui_clmm_sdk, import_sdk2, import_cetus_sui_clmm_sdk2, TESTNET_TOKENS, MAINNET_TOKENS, tokenRegistry, debugEnabled, SIMULATION_ADDRESS, TESTNET_SYMBOL_MAP, MAINNET_SYMBOL_MAP, TESTNET_POOL_KEYS, MAINNET_POOL_KEYS, DeepBookPool, KNOWN_MAINNET_POOLS, CetusPool, NETWORK_MAP, AftermathPool, TurbosPool, FlowXPool, SUI_MAINNET_RPC, HopPool, SEVENK_SDK_COMPATIBLE, SevenKProtocolPool, UNBUILDABLE_PROTOCOLS, PoolAggregator, BRIDGE_TOKENS, HOP_TIMEOUT_MS, Pathfinder, BUILDABLE_PROTOCOLS, PTBBuilder, PTBExecutor, Routex, index_default;
+var import_cetus_sui_clmm_sdk, import_sdk2, import_cetus_sui_clmm_sdk2, debugEnabled, TESTNET_TOKENS, MAINNET_TOKENS, tokenRegistry, activeNetwork, onChainTokenCache, metadataClient, SIMULATION_ADDRESS, TESTNET_SYMBOL_MAP, MAINNET_SYMBOL_MAP, TESTNET_POOL_KEYS, MAINNET_POOL_KEYS, DeepBookPool, KNOWN_MAINNET_POOLS, CetusPool, NETWORK_MAP, AftermathPool, TurbosPool, FlowXPool, SUI_MAINNET_RPC, HopPool, SEVENK_SDK_COMPATIBLE, SevenKProtocolPool, UNBUILDABLE_PROTOCOLS, PoolAggregator, BRIDGE_TOKENS, HOP_TIMEOUT_MS, Pathfinder, BUILDABLE_PROTOCOLS, PTBBuilder, PTBExecutor, Routex, index_default;
 var init_dist10 = __esm({
   "node_modules/routex-sui/dist/index.js"() {
     "use strict";
@@ -295758,6 +295817,7 @@ var init_dist10 = __esm({
     init_dist4();
     init_dist4();
     init_utils7();
+    init_jsonRpc();
     import_cetus_sui_clmm_sdk = __toESM(require_dist4(), 1);
     init_dist5();
     init_esm4();
@@ -295769,6 +295829,13 @@ var init_dist10 = __esm({
     init_jsonRpc();
     import_cetus_sui_clmm_sdk2 = __toESM(require_dist4(), 1);
     init_jsonRpc();
+    debugEnabled = (() => {
+      try {
+        return typeof process !== "undefined" && typeof process.env !== "undefined" && (process.env.ROUTEX_DEBUG === "1" || process.env.ROUTEX_DEBUG === "true");
+      } catch {
+        return false;
+      }
+    })();
     TESTNET_TOKENS = {
       SUI: {
         address: "0x0000000000000000000000000000000000000000000000000000000000000002",
@@ -295813,6 +295880,7 @@ var init_dist10 = __esm({
       }
     };
     MAINNET_TOKENS = {
+      // ─── Native + bluechip stablecoins ───────────────────────────────────────
       SUI: {
         address: "0x0000000000000000000000000000000000000000000000000000000000000002",
         type: "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI",
@@ -295826,7 +295894,7 @@ var init_dist10 = __esm({
         type: "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC",
         symbol: "USDC",
         decimals: 6,
-        name: "USD Coin",
+        name: "USDC",
         scalar: 1e6
       },
       USDT: {
@@ -295837,30 +295905,13 @@ var init_dist10 = __esm({
         name: "Tether USD",
         scalar: 1e6
       },
-      DEEP: {
-        address: "0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270",
-        type: "0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP",
-        symbol: "DEEP",
+      WUSDC: {
+        address: "0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf",
+        type: "0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN",
+        symbol: "WUSDC",
         decimals: 6,
-        name: "DeepBook Token",
+        name: "USD Coin (Wormhole)",
         scalar: 1e6
-      },
-      WETH: {
-        address: "0xaf8cd5edc19c4512f4259f0bee101a40d41ebed738ade5874359610ef8eeced5",
-        type: "0xaf8cd5edc19c4512f4259f0bee101a40d41ebed738ade5874359610ef8eeced5::coin::COIN",
-        symbol: "WETH",
-        decimals: 8,
-        name: "Wrapped Ether",
-        scalar: 1e8
-      },
-      // ─── Tokens with coverage on Turbos / FlowX / Hop / 7K ──────────────────
-      WBTC: {
-        address: "0x027792d9fed7f9844eb4839566001bb6f6cb4804f66aa2da6fe1ee242d896881",
-        type: "0x027792d9fed7f9844eb4839566001bb6f6cb4804f66aa2da6fe1ee242d896881::coin::COIN",
-        symbol: "WBTC",
-        decimals: 8,
-        name: "Wrapped BTC",
-        scalar: 1e8
       },
       BUCK: {
         address: "0xce7ff77a83ea0cb6fd39bd8748e2ec89a3f41e8efdc3f4eb123e0ca37b184db2",
@@ -295870,22 +295921,105 @@ var init_dist10 = __esm({
         name: "Bucket USD",
         scalar: 1e9
       },
-      AUSD: {
-        address: "0x2053d08c1e2bd02791056171aab0fd12bd7cd7efad2ab8f6b9c8902f14129c58",
-        type: "0x2053d08c1e2bd02791056171aab0fd12bd7cd7efad2ab8f6b9c8902f14129c58::ausd::AUSD",
-        symbol: "AUSD",
+      USDY: {
+        address: "0x960b531667636f39e85867775f52f6b1f220a058c4de786905bdf761e06a56bb",
+        type: "0x960b531667636f39e85867775f52f6b1f220a058c4de786905bdf761e06a56bb::usdy::USDY",
+        symbol: "USDY",
         decimals: 6,
-        name: "Aurus USD",
+        name: "Ondo US Dollar Yield",
         scalar: 1e6
+      },
+      // ─── Wrapped majors ──────────────────────────────────────────────────────
+      WETH: {
+        address: "0xaf8cd5edc19c4512f4259f0bee101a40d41ebed738ade5874359610ef8eeced5",
+        type: "0xaf8cd5edc19c4512f4259f0bee101a40d41ebed738ade5874359610ef8eeced5::coin::COIN",
+        symbol: "WETH",
+        decimals: 8,
+        name: "Wrapped Ether",
+        scalar: 1e8
+      },
+      WBTC: {
+        address: "0x027792d9fed7f9844eb4839566001bb6f6cb4804f66aa2da6fe1ee242d896881",
+        type: "0x027792d9fed7f9844eb4839566001bb6f6cb4804f66aa2da6fe1ee242d896881::coin::COIN",
+        symbol: "WBTC",
+        decimals: 8,
+        name: "Wrapped BTC",
+        scalar: 1e8
+      },
+      SOL: {
+        address: "0xb7844e289a8410e50fb3ca48d69eb9cf29e27d223ef90353fe1bd8e27ff8f3f8",
+        type: "0xb7844e289a8410e50fb3ca48d69eb9cf29e27d223ef90353fe1bd8e27ff8f3f8::coin::COIN",
+        symbol: "SOL",
+        decimals: 8,
+        name: "Wrapped SOL",
+        scalar: 1e8
+      },
+      // ─── DeFi / infrastructure tokens ────────────────────────────────────────
+      DEEP: {
+        address: "0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270",
+        type: "0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP",
+        symbol: "DEEP",
+        decimals: 6,
+        name: "DeepBook Token",
+        scalar: 1e6
+      },
+      CETUS: {
+        address: "0x06864a6f921804860930db6ddbe2e16acdf8504495ea7481637a1c8b9a8fe54b",
+        type: "0x06864a6f921804860930db6ddbe2e16acdf8504495ea7481637a1c8b9a8fe54b::cetus::CETUS",
+        symbol: "CETUS",
+        decimals: 9,
+        name: "Cetus Token",
+        scalar: 1e9
+      },
+      TURBOS: {
+        address: "0x5d1f47ea69bb0de31c313d7acf89b890dbb8991ea8e03c6c355171f84bb1ba4a",
+        type: "0x5d1f47ea69bb0de31c313d7acf89b890dbb8991ea8e03c6c355171f84bb1ba4a::turbos::TURBOS",
+        symbol: "TURBOS",
+        decimals: 9,
+        name: "Turbos",
+        scalar: 1e9
+      },
+      FLX: {
+        address: "0x6dae8ca14311574fdfe555524ea48558e3d1360d1607d1c7f98af867e3b7976c",
+        type: "0x6dae8ca14311574fdfe555524ea48558e3d1360d1607d1c7f98af867e3b7976c::flx::FLX",
+        symbol: "FLX",
+        decimals: 8,
+        name: "FlowX",
+        scalar: 1e8
+      },
+      SCA: {
+        address: "0x7016aae72cfc67f2fadf55769c0a7dd54291a583b63051a5ed71081cce836ac6",
+        type: "0x7016aae72cfc67f2fadf55769c0a7dd54291a583b63051a5ed71081cce836ac6::sca::SCA",
+        symbol: "SCA",
+        decimals: 9,
+        name: "Scallop",
+        scalar: 1e9
       },
       NAVX: {
         address: "0xa99b8952d4f7d947ea77fe0ecdcc9e5fc0bcab2841d6e2a5aa00c3044e5544b5",
         type: "0xa99b8952d4f7d947ea77fe0ecdcc9e5fc0bcab2841d6e2a5aa00c3044e5544b5::navx::NAVX",
         symbol: "NAVX",
         decimals: 9,
-        name: "NAVI Token",
+        name: "NAVX Token",
         scalar: 1e9
       },
+      BLUE: {
+        address: "0xe1b45a0e641b9955a20aa0ad1c1f4ad86aad8afb07296d4085e349a50e90bdca",
+        type: "0xe1b45a0e641b9955a20aa0ad1c1f4ad86aad8afb07296d4085e349a50e90bdca::blue::BLUE",
+        symbol: "BLUE",
+        decimals: 9,
+        name: "Bluefin",
+        scalar: 1e9
+      },
+      SUIP: {
+        address: "0xe4239cd951f6c53d9c41e25270d80d31f925ad1655e5ba5b543843d4a66975ee",
+        type: "0xe4239cd951f6c53d9c41e25270d80d31f925ad1655e5ba5b543843d4a66975ee::SUIP::SUIP",
+        symbol: "SUIP",
+        decimals: 9,
+        name: "SuiPad",
+        scalar: 1e9
+      },
+      // ─── Liquid staking SUI variants ─────────────────────────────────────────
       HASUI: {
         address: "0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57efa4bd3c29f47d",
         type: "0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57efa4bd3c29f47d::hasui::HASUI",
@@ -295899,18 +296033,88 @@ var init_dist10 = __esm({
         type: "0xf325ce1300e8dac124071d3152c5c5ee6174914f8bc2161e88329cf579246efc::afsui::AFSUI",
         symbol: "AFSUI",
         decimals: 9,
-        name: "Aftermath Finance Staked SUI",
+        name: "Aftermath Staked SUI",
         scalar: 1e9
+      },
+      VSUI: {
+        address: "0x549e8b69270defbfafd4f94e17ec44cdbdd99820b33bda2278dea3b9a32d3f55",
+        type: "0x549e8b69270defbfafd4f94e17ec44cdbdd99820b33bda2278dea3b9a32d3f55::cert::CERT",
+        symbol: "VSUI",
+        decimals: 9,
+        name: "Volo Staked SUI",
+        scalar: 1e9
+      },
+      STSUI: {
+        address: "0xd1b72982e40348d069bb1ff701e634c117bb5f741f44dff91e472d3b01461e55",
+        type: "0xd1b72982e40348d069bb1ff701e634c117bb5f741f44dff91e472d3b01461e55::stsui::STSUI",
+        symbol: "STSUI",
+        decimals: 9,
+        name: "AlphaFi Staked SUI",
+        scalar: 1e9
+      },
+      // ─── Walrus + ecosystem ──────────────────────────────────────────────────
+      WAL: {
+        address: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59",
+        type: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL",
+        symbol: "WAL",
+        decimals: 9,
+        name: "Walrus",
+        scalar: 1e9
+      },
+      NS: {
+        address: "0x5145494a5f5100e645e4b0aa950fa6b68f614e8c59e17bc5ded3495123a79178",
+        type: "0x5145494a5f5100e645e4b0aa950fa6b68f614e8c59e17bc5ded3495123a79178::ns::NS",
+        symbol: "NS",
+        decimals: 6,
+        name: "SuiNS Token",
+        scalar: 1e6
+      },
+      SEND: {
+        address: "0xb45fcfcc2cc07ce0702cc2d229621e046c906ef14d9b25e8e4d25f6e8763fef7",
+        type: "0xb45fcfcc2cc07ce0702cc2d229621e046c906ef14d9b25e8e4d25f6e8763fef7::send::SEND",
+        symbol: "SEND",
+        decimals: 6,
+        name: "Suilend",
+        scalar: 1e6
+      },
+      // ─── Popular memes (verified canonical addresses) ────────────────────────
+      FUD: {
+        address: "0x76cb819b01abed502bee8a702b4c2d547532c12f25001c9dea795a5e631c26f1",
+        type: "0x76cb819b01abed502bee8a702b4c2d547532c12f25001c9dea795a5e631c26f1::fud::FUD",
+        symbol: "FUD",
+        decimals: 5,
+        name: "FUD",
+        scalar: 1e5
+      },
+      LOFI: {
+        address: "0xf22da9a24ad027cccb5f2d496cbe91de953d363513db08a3a734d361c7c17503",
+        type: "0xf22da9a24ad027cccb5f2d496cbe91de953d363513db08a3a734d361c7c17503::LOFI::LOFI",
+        symbol: "LOFI",
+        decimals: 9,
+        name: "LOFI",
+        scalar: 1e9
+      },
+      HIPPO: {
+        address: "0x8993129d72e733985f7f1a00396cbd055bad6f817fee36576ce483c8bbb8b87b",
+        type: "0x8993129d72e733985f7f1a00396cbd055bad6f817fee36576ce483c8bbb8b87b::sudeng::SUDENG",
+        symbol: "HIPPO",
+        decimals: 9,
+        name: "sudeng",
+        scalar: 1e9
+      },
+      BLUB: {
+        address: "0xfa7ac3951fdca92c5200d468d31a365eb03b2be9936fde615e69f0c1274ad3a0",
+        type: "0xfa7ac3951fdca92c5200d468d31a365eb03b2be9936fde615e69f0c1274ad3a0::BLUB::BLUB",
+        symbol: "BLUB",
+        decimals: 2,
+        name: "BLUB",
+        scalar: 100
       }
     };
     tokenRegistry = TESTNET_TOKENS;
-    debugEnabled = (() => {
-      try {
-        return typeof process !== "undefined" && typeof process.env !== "undefined" && (process.env.ROUTEX_DEBUG === "1" || process.env.ROUTEX_DEBUG === "true");
-      } catch {
-        return false;
-      }
-    })();
+    activeNetwork = "testnet";
+    onChainTokenCache = /* @__PURE__ */ new Map();
+    metadataClient = null;
     SIMULATION_ADDRESS = "0x0000000000000000000000000000000000000000000000000000000000000001";
     TESTNET_SYMBOL_MAP = {
       SUI: "SUI",
@@ -297154,8 +297358,10 @@ var init_dist10 = __esm({
         this.cetusPool.updateSender(address);
       }
       async getQuote(params) {
-        const tokenIn = resolveToken(params.from);
-        const tokenOut = resolveToken(params.to);
+        const [tokenIn, tokenOut] = await Promise.all([
+          resolveTokenAsync(params.from),
+          resolveTokenAsync(params.to)
+        ]);
         const amountIn = BigInt(params.amount);
         const slippage = params.slippageTolerance ?? 5e-3;
         const SIMULATION_ADDRESS2 = "0x0000000000000000000000000000000000000000000000000000000000000001";
@@ -422383,17 +422589,27 @@ var TOKEN_DECIMALS3 = {
   WETH: 1e8,
   WBTC: 1e8,
   BUCK: 1e9,
-  // Sui ecosystem tokens (added to registry as routex-sui gains support)
+  // Sui ecosystem tokens — match routex-sui@1.4.2's MAINNET_TOKENS registry exactly
   WAL: 1e9,
   AUSD: 1e6,
   NAVX: 1e9,
   HASUI: 1e9,
   AFSUI: 1e9,
   VSUI: 1e9,
+  STSUI: 1e9,
   HAWAL: 1e9,
+  NS: 1e6,
+  SEND: 1e6,
+  CETUS: 1e9,
+  TURBOS: 1e9,
+  FLX: 1e8,
+  SCA: 1e9,
+  BLUE: 1e9,
+  SUIP: 1e9,
   LOFI: 1e9,
-  BLUB: 1e9,
+  BLUB: 100,
   HIPPO: 1e9,
+  FUD: 1e5,
   OCEAN: 1e9,
   BONK: 1e5,
   MEME: 1e9
@@ -422640,15 +422856,25 @@ app.post("/api/intent", async (req, res) => {
       "AFSUI",
       "HASUI",
       "VSUI",
+      "STSUI",
       "BUCK",
       "WAL",
       "HAWAL",
       "AUSD",
       "NAVX",
+      "NS",
+      "SEND",
+      "CETUS",
+      "TURBOS",
+      "FLX",
+      "SCA",
+      "BLUE",
+      "SUIP",
       "LOFI",
       "BLUB",
       "OCEAN",
       "HIPPO",
+      "FUD",
       "BONK",
       "MEME"
     ]);
@@ -423524,7 +423750,7 @@ ${group.members.map((m) => `\u2022 ${m.name} \u2014 ${m.address.slice(0, 10)}\u2
       const msg = qErr?.message ?? String(qErr);
       if (msg.startsWith("Unknown token:")) {
         const unsupported = msg.split(".")[0].replace("Unknown token: ", "");
-        const errEn = `${unsupported} can't be swapped directly yet \u2014 it's not in the routing engine's registry. Supported tokens: SUI, USDC, USDT, WETH, WBTC, DEEP, BUCK, AUSD, NAVX, HASUI, AFSUI. For other tokens (WAL, memecoins), routing support is added as the SDK is updated.`;
+        const errEn = `${unsupported} can't be swapped directly yet \u2014 it's not in the routing engine's registry. Supported tokens: SUI, USDC, USDT, WETH, WBTC, DEEP, BUCK, AUSD, NAVX, HASUI, AFSUI, VSUI, STSUI, WAL, NS, SEND, CETUS, TURBOS, FLX, SCA, BLUE, SUIP, FUD, LOFI, HIPPO, BLUB. Routing support for other tokens is added as the SDK is updated.`;
         const errMsg = lang === "en" ? errEn : await complete({
           system: "You are Vektor. Translate this error message, keeping all token symbols unchanged.",
           prompt: errEn,
