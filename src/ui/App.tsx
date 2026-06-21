@@ -709,9 +709,10 @@ interface BubbleProps {
   onSign:       () => void
   onBatchSign:  () => void
   onSendSign:   () => void
+  onOnboardFundSign: () => void
 }
 
-function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, onSendSign }: BubbleProps) {
+function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, onSendSign, onOnboardFundSign }: BubbleProps) {
   if (msg.role === 'user') {
     return (
       <div className="msg-in flex justify-end">
@@ -862,9 +863,25 @@ function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, on
         if (it === 'conditional') return <ConditionCard payload={msg.payload} />
         if (it === 'explain_transaction') return <ExplainCard payload={msg.payload} />
         if (it === 'request_payment') return <PaymentCard payload={msg.payload} paymentId={msg.payload?.payment?.id} />
-        if (it === 'onboard') return msg.payload?.inviteLink
-          ? <InviteLinkCard payload={msg.payload} />
-          : (msg.text ? <GeneralCard message={msg.text} /> : null)
+        if (it === 'onboard') {
+          if (msg.payload?.needsFunding && !msg.executionDigest) {
+            return (
+              <div className="space-y-3">
+                {msg.text && <GeneralCard message={msg.text} />}
+                {msg.executionError && <p className="text-xs text-red-400">{msg.executionError}</p>}
+                <button
+                  onClick={onOnboardFundSign}
+                  className="w-full py-2 rounded-lg bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/30 hover:border-purple-500/60 text-purple-300 text-xs font-semibold transition-colors"
+                >
+                  Confirm &amp; Fund Invite →
+                </button>
+              </div>
+            )
+          }
+          return msg.payload?.inviteLink
+            ? <InviteLinkCard payload={msg.payload} />
+            : (msg.text ? <GeneralCard message={msg.text} /> : null)
+        }
 
         if (it === 'batch_payment' || it === 'split_payment') {
           // After execution
@@ -1990,6 +2007,71 @@ export default function App() {
     }
   }
 
+  /* ── Onboard — creator funds the invite (sent to Vektor's wallet, which
+   *    forwards it in full to whoever claims the link) ────────────────── */
+  async function handleOnboardFundSign(msgId: string): Promise<{ ok: boolean; error?: string }> {
+    const msg         = messages.find(m => m.id === msgId)
+    const p           = msg?.payload?.ptbParams as { token?: string; amount?: number; recipient?: string } | undefined
+    const inviteToken = msg?.payload?.inviteToken as string | undefined
+    if (!msg || !effectiveAddress || !p?.token || !p?.amount || !p?.recipient || !inviteToken) {
+      return { ok: false, error: 'Missing funding data' }
+    }
+
+    setMessages(prev => prev.map(m =>
+      m.id === msgId ? { ...m, actionLabel: '· BUILDING · PTB' } : m
+    ))
+
+    try {
+      const res = await fetch('/api/send-ptb', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          senderAddress: effectiveAddress,
+          recipient:     p.recipient,
+          token:         p.token,
+          amount:        p.amount,
+        }),
+      })
+      const json = await res.json()
+      if (!json.ok) throw new Error(json.error ?? 'Failed to build funding transfer')
+
+      setMessages(prev => prev.map(m =>
+        m.id === msgId ? { ...m, actionLabel: '· SIGNING · ZKLOGIN' } : m
+      ))
+
+      const txBytesB64 = await buildBytesFromPtbJson(json.ptbJson)
+      const digest      = await zkLogin.signAndExecuteBytes(txBytesB64)
+
+      const confirmRes  = await fetch(`/api/onboard/${inviteToken}/fund-confirm`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ digest }),
+      })
+      const confirmJson = await confirmRes.json().catch(() => ({}))
+
+      setMessages(prev => prev.map(m =>
+        m.id === msgId ? {
+          ...m,
+          actionLabel:     '· FUNDED · INVITE READY',
+          executionDigest: digest,
+          executedAt:      Date.now(),
+          payload:         { ...m.payload, inviteLink: confirmJson?.inviteLink ?? null },
+        } : m
+      ))
+      void reportIntentStatus(msgId, 'success')
+      setTimeout(refreshPortfolio, 3000)
+      return { ok: true }
+    } catch (err: any) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      const label  = isNeedResign(err) ? '· RE-SIGNING IN…' : '· FAILED'
+      setMessages(prev => prev.map(m =>
+        m.id === msgId ? { ...m, actionLabel: label, executionError: errMsg } : m
+      ))
+      if (!isNeedResign(err)) void reportIntentStatus(msgId, 'failed')
+      return { ok: false, error: errMsg }
+    }
+  }
+
   /* ── Fix (rewrite PTB) ────────────────────────────────────────────── */
   async function handleFix(msgId: string) {
     const msg = messages.find(m => m.id === msgId)
@@ -2383,6 +2465,7 @@ export default function App() {
                   onSign={() => handleNaviSign(msg.id)}
                   onBatchSign={() => handleBatchSign(msg.id)}
                   onSendSign={() => handleSendSign(msg.id)}
+                  onOnboardFundSign={() => handleOnboardFundSign(msg.id)}
                 />
               ))}
 

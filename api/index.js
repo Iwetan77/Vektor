@@ -419937,6 +419937,7 @@ function createInviteLink(creatorWallet, amount = 1, token_symbol = "USDC") {
     amount,
     token_symbol,
     funded: false,
+    fundDigest: null,
     claimed: false,
     claimedBy: null,
     claimDigest: null
@@ -419944,6 +419945,14 @@ function createInviteLink(creatorWallet, amount = 1, token_symbol = "USDC") {
   store.invites.push(record2);
   save(store);
   return record2;
+}
+function markInviteFunded(token, digest) {
+  const store = load();
+  const item = store.invites.find((i) => i.token === token);
+  if (!item) return;
+  item.funded = true;
+  item.fundDigest = digest;
+  save(store);
 }
 function markInviteClaimed(token, claimedBy, digest) {
   const store = load();
@@ -422595,7 +422604,8 @@ var NEEDS_CLIENT_SIGNATURE = /* @__PURE__ */ new Set([
   "split_payment",
   "lend",
   "borrow",
-  "repay"
+  "repay",
+  "onboard"
 ]);
 function stripMarkdown(s) {
   return s.replace(/\*\*(.+?)\*\*/gs, "$1").replace(/__(.+?)__/gs, "$1").replace(/`([^`]+)`/g, "$1").replace(/^\s{0,3}#{1,6}\s+/gm, "").trim();
@@ -422650,6 +422660,19 @@ function fmtAmount(n) {
 function normalizeTokenSymbol(s) {
   if (!s) return s;
   return s.trim().replace(/^\$/, "").toUpperCase();
+}
+var _vektorFundingAddress = null;
+async function getVektorFundingAddress() {
+  if (_vektorFundingAddress) return _vektorFundingAddress;
+  const fundingKey = process.env.VEKTOR_FUNDING_KEY;
+  if (!fundingKey) return null;
+  const [{ Ed25519Keypair: Ed25519Keypair3 }, { decodeSuiPrivateKey: decodeSuiPrivateKey2 }] = await Promise.all([
+    Promise.resolve().then(() => (init_ed255192(), ed25519_exports)),
+    Promise.resolve().then(() => (init_cryptography(), cryptography_exports))
+  ]);
+  const { secretKey } = decodeSuiPrivateKey2(fundingKey);
+  _vektorFundingAddress = Ed25519Keypair3.fromSecretKey(secretKey).getPublicKey().toSuiAddress();
+  return _vektorFundingAddress;
 }
 async function addTokenTransfers(tx, coinType, symbol, owner, transfers) {
   const network = process.env.SUI_NETWORK ?? "mainnet";
@@ -422832,25 +422855,36 @@ app.post("/api/intent", async (req, res) => {
       }
       const nameMatch = text.match(/^\/?onboard\s+([A-Za-z][A-Za-z0-9 _-]*?)(?:\s+with\b|\s*\$|\s+\d|\s*$)/i);
       const recipient = nameMatch?.[1]?.trim() ?? null;
-      let inviteLink = null;
-      let invite = null;
-      if (sender !== SIM_ADDR2) {
-        invite = createInviteLink(sender, amount, token);
-        inviteLink = `${BASE3}?invite=${invite.token}`;
-      }
       const amountLabel = token === "USDC" ? `$${amount} USDC` : `${amount} ${token}`;
       const who = recipient ? recipient : "a friend";
-      const msg = inviteLink ? `Send this link to ${who} to claim ${amountLabel}: \`${inviteLink}\`` : "Connect your wallet to create a funded invite.";
+      if (sender === SIM_ADDR2) {
+        res.json({
+          ok: true,
+          intent_type: "onboard",
+          language: "en",
+          message: "Connect your wallet to create a funded invite.",
+          actionLabel: `\xB7 ONBOARD${recipient ? ` \xB7 ${recipient}` : ""} \xB7 ${amountLabel}`
+        });
+        return;
+      }
+      const vektorAddress = await getVektorFundingAddress();
+      if (!vektorAddress) {
+        res.json({ ok: false, error: "Onboarding is not configured on this server (VEKTOR_FUNDING_KEY missing).", language: "en" });
+        return;
+      }
+      const invite = createInviteLink(sender, amount, token);
       res.json({
         ok: true,
         intent_type: "onboard",
         language: "en",
-        inviteLink,
+        needsFunding: true,
+        inviteToken: invite.token,
         amount,
         token,
         recipient,
-        message: msg,
-        actionLabel: `\xB7 ONBOARD${recipient ? ` \xB7 ${recipient}` : ""} \xB7 ${amountLabel}`
+        ptbParams: { token, amount, recipient: vektorAddress },
+        message: `To create this invite, send ${amountLabel} to Vektor now \u2014 it'll be forwarded in full to ${who} the moment they claim it. You're not giving this away; Vektor just holds it in escrow until then.`,
+        actionLabel: `\xB7 ONBOARD${recipient ? ` \xB7 ${recipient}` : ""} \xB7 FUND ${amountLabel}`
       });
       return;
     }
@@ -423640,6 +423674,8 @@ ${group.members.map((m) => `\u2022 ${m.name} \u2014 ${m.address.slice(0, 10)}\u2
       const threshold = trigger_price ?? 0;
       const dir = trigger_direction ?? "below";
       const currentPx = getCurrentPrice(assetSym);
+      const echoMeta = sender !== SIM_ADDR2 ? (await readEchoData(sender).catch(() => null))?.sessionKeyMetadata : null;
+      const hasActiveSessionKey = !!echoMeta && echoMeta.expiresAt > Date.now();
       const record2 = addCondition({
         wallet: sender,
         description: text,
@@ -423649,9 +423685,9 @@ ${group.members.map((m) => `\u2022 ${m.name} \u2014 ${m.address.slice(0, 10)}\u2
           threshold
         },
         action: parsed,
-        autoExecute: false
+        autoExecute: hasActiveSessionKey
       });
-      const condMsgEn = `Condition armed: will trigger when ${assetSym} goes ${dir} $${threshold}. Current price: $${currentPx?.toFixed(4) ?? "?"}. Polling every 30s.`;
+      const condMsgEn = hasActiveSessionKey ? `Condition armed: will auto-execute via your Echo session key when ${assetSym} goes ${dir} $${threshold}. Current price: $${currentPx?.toFixed(4) ?? "?"}. Polling every 30s.` : `Condition armed: will trigger when ${assetSym} goes ${dir} $${threshold}. Current price: $${currentPx?.toFixed(4) ?? "?"}. Polling every 30s. (No active Echo session key \u2014 you'll get an alert to execute manually. Set one up in the Echo tab for hands-free execution.)`;
       const condMessage = lang === "en" ? condMsgEn : await complete({
         system: "You are Vektor. Translate this DeFi condition alert exactly, keeping token symbols, prices, and technical terms.",
         prompt: condMsgEn,
@@ -423666,7 +423702,7 @@ ${group.members.map((m) => `\u2022 ${m.name} \u2014 ${m.address.slice(0, 10)}\u2
         language: lang,
         currentPrice: currentPx,
         message: condMessage,
-        actionLabel: `\xB7 WATCH \xB7 ${assetSym} ${dir === "below" ? "<" : ">"} $${threshold} \xB7 ARMED`
+        actionLabel: `\xB7 WATCH \xB7 ${assetSym} ${dir === "below" ? "<" : ">"} $${threshold} \xB7 ${hasActiveSessionKey ? "ARMED \xB7 ECHO" : "ARMED"}`
       });
       return;
     }
@@ -424033,8 +424069,24 @@ app.get("/api/onboard/:token", (req, res) => {
     uses: invite.uses,
     amount: invite.amount,
     token_symbol: invite.token_symbol,
+    funded: invite.funded,
     claimed: invite.claimed
   } });
+});
+app.post("/api/onboard/:token/fund-confirm", (req, res) => {
+  const { digest } = req.body;
+  if (!digest) {
+    res.status(400).json({ ok: false, error: "digest required" });
+    return;
+  }
+  const invite = getInviteLink(req.params.token);
+  if (!invite) {
+    res.status(404).json({ ok: false, error: "Invite not found" });
+    return;
+  }
+  markInviteFunded(req.params.token, digest);
+  const BASE3 = process.env.VEKTOR_URL ?? "http://localhost:5173";
+  res.json({ ok: true, inviteLink: `${BASE3}?invite=${req.params.token}` });
 });
 var TESTNET_USDC_COIN_TYPE = "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC";
 var claimLimiter = rate_limit_default({
@@ -424054,6 +424106,10 @@ app.post("/api/onboard/:token/claim", claimLimiter, async (req, res) => {
     const invite = getInviteLink(String(req.params.token));
     if (!invite) {
       res.status(404).json({ ok: false, error: "Invite not found" });
+      return;
+    }
+    if (!invite.funded) {
+      res.status(409).json({ ok: false, error: "This invite has not been funded by its creator yet." });
       return;
     }
     if (invite.claimed) {

@@ -56,7 +56,7 @@ import {
   addScheduled, getScheduled, cancelScheduled, getAllScheduled, getScheduledById,
   addCondition, getConditions, cancelCondition,
   getPositions, addPosition, cancelCondition as removeCondition,
-  createInviteLink, getInviteLink, touchInviteLink, markInviteClaimed,
+  createInviteLink, getInviteLink, touchInviteLink, markInviteClaimed, markInviteFunded,
   syncStoreFromKV,
 } from './db/store.js'
 import {
@@ -151,7 +151,7 @@ const NEEDS_CLIENT_SIGNATURE: ReadonlySet<string> = new Set([
   'swap', 'buy_memecoin', 'sell_memecoin', 'exit_at_profit', 'exit_at_loss', 'exit',
   'compound', 'rebalance', 'risk_qualified',
   'send', 'contact_payment', 'batch_payment', 'split_payment',
-  'lend', 'borrow', 'repay',
+  'lend', 'borrow', 'repay', 'onboard',
 ])
 
 /**
@@ -205,6 +205,21 @@ function fmtAmount(n: number): string {
 function normalizeTokenSymbol<T extends string | null | undefined>(s: T): T {
   if (!s) return s
   return s.trim().replace(/^\$/, '').toUpperCase() as T
+}
+
+let _vektorFundingAddress: string | null = null
+/** The Vektor treasury wallet's public address, derived from VEKTOR_FUNDING_KEY. */
+async function getVektorFundingAddress(): Promise<string | null> {
+  if (_vektorFundingAddress) return _vektorFundingAddress
+  const fundingKey = process.env.VEKTOR_FUNDING_KEY
+  if (!fundingKey) return null
+  const [{ Ed25519Keypair }, { decodeSuiPrivateKey }] = await Promise.all([
+    import('@mysten/sui/keypairs/ed25519'),
+    import('@mysten/sui/cryptography'),
+  ])
+  const { secretKey } = decodeSuiPrivateKey(fundingKey)
+  _vektorFundingAddress = Ed25519Keypair.fromSecretKey(secretKey).getPublicKey().toSuiAddress()
+  return _vektorFundingAddress
 }
 
 /**
@@ -449,30 +464,44 @@ app.post('/api/intent', async (req, res) => {
       const nameMatch = text.match(/^\/?onboard\s+([A-Za-z][A-Za-z0-9 _-]*?)(?:\s+with\b|\s*\$|\s+\d|\s*$)/i)
       const recipient = nameMatch?.[1]?.trim() ?? null
 
-      let inviteLink: string | null = null
-      let invite: { token: string; amount: number } | null = null
-      if (sender !== SIM_ADDR) {
-        invite = createInviteLink(sender, amount, token)
-        inviteLink = `${BASE}?invite=${invite.token}`
-      }
-
       // USDC reads naturally with a "$"; SUI does not.
       const amountLabel = token === 'USDC' ? `$${amount} USDC` : `${amount} ${token}`
       const who = recipient ? recipient : 'a friend'
-      const msg = inviteLink
-        ? `Send this link to ${who} to claim ${amountLabel}: \`${inviteLink}\``
-        : 'Connect your wallet to create a funded invite.'
+
+      if (sender === SIM_ADDR) {
+        res.json({
+          ok: true, intent_type: 'onboard', language: 'en',
+          message: 'Connect your wallet to create a funded invite.',
+          actionLabel: `· ONBOARD${recipient ? ` · ${recipient}` : ''} · ${amountLabel}`,
+        })
+        return
+      }
+
+      // The invite link is funded by YOU, the creator — not by Vektor's
+      // treasury. Vektor is a pass-through: you send `amount` to Vektor's
+      // wallet now, and Vektor forwards that exact amount to whoever claims
+      // the link later. Create the (unfunded) invite record, then ask the
+      // creator to sign that funding transfer before any link is shareable.
+      const vektorAddress = await getVektorFundingAddress()
+      if (!vektorAddress) {
+        res.json({ ok: false, error: 'Onboarding is not configured on this server (VEKTOR_FUNDING_KEY missing).', language: 'en' })
+        return
+      }
+
+      const invite = createInviteLink(sender, amount, token)
 
       res.json({
         ok:          true,
         intent_type: 'onboard',
         language:    'en',
-        inviteLink,
+        needsFunding: true,
+        inviteToken: invite.token,
         amount,
         token,
         recipient,
-        message:     msg,
-        actionLabel: `· ONBOARD${recipient ? ` · ${recipient}` : ''} · ${amountLabel}`,
+        ptbParams: { token, amount, recipient: vektorAddress },
+        message:     `To create this invite, send ${amountLabel} to Vektor now — it'll be forwarded in full to ${who} the moment they claim it. You're not giving this away; Vektor just holds it in escrow until then.`,
+        actionLabel: `· ONBOARD${recipient ? ` · ${recipient}` : ''} · FUND ${amountLabel}`,
       })
       return
     }
@@ -1259,6 +1288,15 @@ app.post('/api/intent', async (req, res) => {
       const dir       = trigger_direction ?? 'below'
       const currentPx = getCurrentPrice(assetSym)
 
+      // If this wallet has an active, unexpired Echo session key, arm the
+      // condition for autonomous execution — runConditionTick() already
+      // knows how to use it (tryEchoSessionExecute), it just never had
+      // anything actually set autoExecute:true before now.
+      const echoMeta = sender !== SIM_ADDR
+        ? (await readEchoData(sender).catch(() => null))?.sessionKeyMetadata
+        : null
+      const hasActiveSessionKey = !!echoMeta && echoMeta.expiresAt > Date.now()
+
       const record = addCondition({
         wallet:      sender,
         description: text,
@@ -1268,10 +1306,12 @@ app.post('/api/intent', async (req, res) => {
           threshold,
         },
         action:      parsed,
-        autoExecute: false,
+        autoExecute: hasActiveSessionKey,
       })
 
-      const condMsgEn   = `Condition armed: will trigger when ${assetSym} goes ${dir} $${threshold}. Current price: $${currentPx?.toFixed(4) ?? '?'}. Polling every 30s.`
+      const condMsgEn   = hasActiveSessionKey
+        ? `Condition armed: will auto-execute via your Echo session key when ${assetSym} goes ${dir} $${threshold}. Current price: $${currentPx?.toFixed(4) ?? '?'}. Polling every 30s.`
+        : `Condition armed: will trigger when ${assetSym} goes ${dir} $${threshold}. Current price: $${currentPx?.toFixed(4) ?? '?'}. Polling every 30s. (No active Echo session key — you'll get an alert to execute manually. Set one up in the Echo tab for hands-free execution.)`
       const condMessage = lang === 'en' ? condMsgEn : await complete({
         system: 'You are Vektor. Translate this DeFi condition alert exactly, keeping token symbols, prices, and technical terms.',
         prompt: condMsgEn, maxTokens: 150, lang,
@@ -1282,7 +1322,7 @@ app.post('/api/intent', async (req, res) => {
         condition: record, language: lang,
         currentPrice: currentPx,
         message:      condMessage,
-        actionLabel:  `· WATCH · ${assetSym} ${dir === 'below' ? '<' : '>'} $${threshold} · ARMED`,
+        actionLabel:  `· WATCH · ${assetSym} ${dir === 'below' ? '<' : '>'} $${threshold} · ${hasActiveSessionKey ? 'ARMED · ECHO' : 'ARMED'}`,
       })
       return
     }
@@ -1711,8 +1751,22 @@ app.get('/api/onboard/:token', (req, res) => {
     uses:          invite.uses,
     amount:        invite.amount,
     token_symbol:  invite.token_symbol,
+    funded:        invite.funded,
     claimed:       invite.claimed,
   } })
+})
+
+/** Creator reports the digest of their funding transfer (sent to the Vektor
+ *  wallet returned by the /onboard fast-path's ptbParams). Once marked
+ *  funded, the link becomes claimable and shareable. */
+app.post('/api/onboard/:token/fund-confirm', (req, res) => {
+  const { digest } = req.body as { digest?: string }
+  if (!digest) { res.status(400).json({ ok: false, error: 'digest required' }); return }
+  const invite = getInviteLink(req.params.token)
+  if (!invite) { res.status(404).json({ ok: false, error: 'Invite not found' }); return }
+  markInviteFunded(req.params.token, digest)
+  const BASE = process.env.VEKTOR_URL ?? 'http://localhost:5173'
+  res.json({ ok: true, inviteLink: `${BASE}?invite=${req.params.token}` })
 })
 
 /* ─── Claim a funded invite — testnet USDC from VEKTOR_FUNDING_KEY ────── */
@@ -1742,6 +1796,7 @@ app.post('/api/onboard/:token/claim', claimLimiter, async (req, res) => {
 
     const invite = getInviteLink(String(req.params.token))
     if (!invite) { res.status(404).json({ ok: false, error: 'Invite not found' }); return }
+    if (!invite.funded) { res.status(409).json({ ok: false, error: 'This invite has not been funded by its creator yet.' }); return }
     if (invite.claimed) { res.status(409).json({ ok: false, error: 'Invite already claimed' }); return }
     if (invite.amount <= 0 || invite.amount > 50) {
       res.status(400).json({ ok: false, error: 'Invite amount out of allowed range (0, 50]' }); return

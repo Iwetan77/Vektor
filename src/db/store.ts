@@ -69,6 +69,7 @@ export interface InviteLink {
   amount:        number
   token_symbol:  string
   funded:        boolean
+  fundDigest:    string | null
   claimed:       boolean
   claimedBy:     string | null
   claimDigest:   string | null
@@ -267,6 +268,7 @@ export function createInviteLink(
     amount,
     token_symbol,
     funded:      false,
+    fundDigest:  null,
     claimed:     false,
     claimedBy:   null,
     claimDigest: null,
@@ -274,6 +276,17 @@ export function createInviteLink(
   store.invites.push(record)
   save(store)
   return record
+}
+
+/** Mark an invite as funded — the creator's transfer to the Vektor wallet
+ *  has landed. Claims are rejected until this is set. */
+export function markInviteFunded(token: string, digest: string): void {
+  const store = load()
+  const item = store.invites.find(i => i.token === token)
+  if (!item) return
+  item.funded     = true
+  item.fundDigest = digest
+  save(store)
 }
 
 export function markInviteClaimed(token: string, claimedBy: string, digest: string): void {
