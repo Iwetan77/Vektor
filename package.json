@@ -51,7 +51,7 @@
     "node-cron": "^4.2.1",
     "openai": "^6.39.1",
     "routex-sui": "^1.4.2",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -85,5 +85,14 @@
   "license": "MIT",
   "engines": {
     "node": "22.x"
+  },
+  "overrides": {
+    "navi-sdk": {
+      "vitest": "^3.2.5",
+      "esrun": {
+        "esbuild": "^0.25.0"
+      }
+    },
+    "uuid": "^11.1.1"
   }
 }
