@@ -34,7 +34,7 @@ interface IntentRecord {
   id:        string
   type:      string
   summary:   string
-  status:    'success' | 'pending' | 'failed'
+  status:    'success' | 'pending' | 'failed' | 'cancelled'
   timestamp: string
 }
 
@@ -348,7 +348,12 @@ export function Sidebar({ wallet, portfolio, onRefresh, mobileOpen = false, onMo
                   <span className={`text-[9px] font-mono uppercase tracking-widest ${intentColor(h.type ?? '')}`}>
                     · {(h.type ?? 'unknown').replace(/_/g, ' ')}
                   </span>
-                  <span className={`text-[9px] font-mono ${h.status === 'success' ? 'text-emerald-500' : h.status === 'failed' ? 'text-red-500' : 'text-yellow-500'}`}>
+                  <span className={`text-[9px] font-mono ${
+                    h.status === 'success'   ? 'text-emerald-500' :
+                    h.status === 'failed'    ? 'text-red-500' :
+                    h.status === 'cancelled' ? 'text-slate-500' :
+                                                'text-yellow-500'
+                  }`}>
                     {h.status}
                   </span>
                 </div>

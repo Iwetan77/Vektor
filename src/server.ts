@@ -2004,8 +2004,8 @@ app.post('/api/intent-status', (req, res) => {
     const { wallet, recordId, status } = req.body as {
       wallet?: string; recordId?: string; status?: string
     }
-    if (!wallet || !recordId || (status !== 'success' && status !== 'failed' && status !== 'pending')) {
-      res.status(400).json({ ok: false, error: 'wallet, recordId, and status (success|failed|pending) are required' })
+    if (!wallet || !recordId || (status !== 'success' && status !== 'failed' && status !== 'pending' && status !== 'cancelled')) {
+      res.status(400).json({ ok: false, error: 'wallet, recordId, and status (success|failed|pending|cancelled) are required' })
       return
     }
     updateIntentStatus(wallet, recordId, status)

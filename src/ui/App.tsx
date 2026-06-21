@@ -226,6 +226,21 @@ function buildRewriteLabel(quote: any, report: any): string {
   return `· REWRITE · ${chain} · SCORE ${score}/100`
 }
 
+/* ─── Multi-step prompt chaining ─────────────────────────────────────────── *
+ * Splits "swap all my WAL for SUI then send it to ebube" into ordered raw-text
+ * steps on "then" / "and then" / "after that". A single-step prompt (the
+ * overwhelming common case) returns its own text unchanged in a 1-length array
+ * so callers can branch on `.length > 1` without a separate code path. */
+function splitChainSteps(text: string): string[] {
+  const parts = text.split(/\s*,?\s*(?:and\s+)?then\b\s*|\s*,?\s*after\s+that\b\s*/i)
+    .map(s => s.trim())
+    .filter(Boolean)
+  return parts.length > 1 ? parts : [text]
+}
+
+const CHAIN_CONTINUE_RE = /\b(go on|continue|proceed|go ahead|do it|yes|yeah|yep|yup|sure|ok|okay)\b/i
+const CHAIN_STOP_RE     = /\b(stop|cancel|abort|no|nah|don'?t)\b/i
+
 /* ─── Sub-components ─────────────────────────────────────────────────────── */
 
 function Spinner({ size = 4 }: { size?: number }) {
@@ -1140,6 +1155,8 @@ export default function App() {
   const [currentPage,     setCurrentPage]     = useState<'chat' | 'echo'>('chat')
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [inviteClaim, setInviteClaim] = useState<{ amount: number; tokenSymbol: string; digest: string } | null>(null)
+  // Multi-step prompt chain awaiting a continue/stop decision after a step failed.
+  const [pendingChain, setPendingChain] = useState<{ steps: string[]; nextIndex: number } | null>(null)
   const [echoAlerts,      setEchoAlerts]      = useState<EchoWsMessage[]>([])
   const wsRef = useRef<WebSocket | null>(null)
 
@@ -1355,10 +1372,45 @@ export default function App() {
       setInput('')
       setIsLoading(false)
       setShowSlashMenu(false)
+      setPendingChain(null)
       return
     }
 
     if (!effectiveAddress || isLoading) return
+
+    // ── Multi-step chain: this message is a reply to "continue or stop?" ────
+    if (pendingChain) {
+      const chain = pendingChain
+      setPendingChain(null)
+      const wantsContinue = CHAIN_CONTINUE_RE.test(trimmed)
+      const wantsStop     = CHAIN_STOP_RE.test(trimmed)
+      if (wantsContinue || wantsStop) {
+        setInput('')
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'user', text: trimmed }])
+        if (wantsStop) {
+          const remaining = chain.steps.length - chain.nextIndex
+          setMessages(prev => [...prev, {
+            id: crypto.randomUUID(), role: 'vektor', intentType: 'general',
+            actionLabel: '· CHAIN · STOPPED',
+            text: `Okay — stopped. ${remaining} remaining step${remaining === 1 ? '' : 's'} cancelled.`,
+          }])
+          return
+        }
+        await runChainFrom(chain.steps, chain.nextIndex)
+        return
+      }
+      // Ambiguous reply — drop the stale chain and fall through to treat
+      // this as a brand-new message instead of getting stuck.
+    }
+
+    // ── Multi-step chain: "swap all my WAL for SUI then send it to ebube" ───
+    const chainSteps = splitChainSteps(trimmed)
+    if (chainSteps.length > 1) {
+      setInput('')
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'user', text: trimmed }])
+      await runChainFrom(chainSteps, 0)
+      return
+    }
 
     const controller  = new AbortController()
     abortRef.current  = controller
@@ -1474,6 +1526,153 @@ export default function App() {
     }
   }
 
+  /* ── Run a single step of a multi-step chain ─────────────────────────
+   * Mirrors the single-shot body of sendMessage, but (a) resolves "it"/
+   * "that" against the previous step's actual on-chain output, (b) auto-
+   * triggers the right signing handler instead of waiting for a button
+   * click — the user already expressed intent for every step up front —
+   * and (c) waits for the real execution result (not just "PTB built")
+   * before telling the caller whether to advance to the next step. */
+  async function runOneChainStep(
+    stepText: string,
+    stepIndex: number,
+    totalSteps: number,
+    priorOutcome?: { asset: string; amount: number },
+  ): Promise<{ ok: boolean; error?: string; outcome?: { asset: string; amount: number } }> {
+    let resolvedText = stepText
+    if (priorOutcome && /\b(it|that)\b/i.test(stepText)) {
+      resolvedText = stepText.replace(/\b(it|that)\b/i, `${priorOutcome.amount} ${priorOutcome.asset}`)
+    }
+
+    const vektorMsgId = crypto.randomUUID()
+    setMessages(prev => [...prev, {
+      id: vektorMsgId, role: 'vektor', loading: true,
+      actionLabel: `· STEP ${stepIndex + 1}/${totalSteps} · PARSING`,
+    }])
+
+    try {
+      const res  = await fetch('/api/intent', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ text: resolvedText, senderAddress: effectiveAddress, firstName: zkLogin.user?.givenName ?? undefined }),
+      })
+      const raw  = await res.text()
+      let json: any
+      try { json = raw ? JSON.parse(raw) : {} }
+      catch { throw new Error(`Bad response from server (${res.status})`) }
+
+      if (!json.ok) {
+        setMessages(prev => prev.map(m =>
+          m.id === vektorMsgId ? { ...m, loading: false, actionLabel: '· ERROR', text: json.error ?? 'Step failed', intentType: 'error' } : m,
+        ))
+        return { ok: false, error: json.error ?? 'Step failed to parse' }
+      }
+
+      const intentType = json.intent_type as string
+      const swapTypes   = ['swap', 'compound', 'rebalance', 'risk_qualified', 'buy_memecoin', 'sell_memecoin', 'exit_at_profit', 'exit_at_loss', 'exit']
+      const writeIntents = new Set([...swapTypes, 'send', 'contact_payment', 'transfer', 'lend', 'borrow', 'repay', 'batch_payment', 'split_payment', 'pay'])
+
+      if (writeIntents.has(intentType) && effectiveAddress) {
+        const histId = json.recordId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        json.recordId = histId
+        recordHistory(effectiveAddress, { id: histId, type: intentType, summary: resolvedText, status: 'pending' })
+      }
+
+      if (swapTypes.includes(intentType) && json.quote && json.report) {
+        setMessages(prev => prev.map(m =>
+          m.id === vektorMsgId
+            ? {
+                ...m, loading: false, language: json.language ?? 'en',
+                actionLabel:  buildSwapLabel(json.quote, json.report),
+                originalText: resolvedText, intentType, recordId: json.recordId,
+                guardData: {
+                  parsedIntent: json.parsedIntent, quote: json.quote, report: json.report,
+                  _rawReport: json._rawReport, quoteParams: json.quoteParams,
+                },
+                phase: 'review' as const,
+              }
+            : m,
+        ))
+        const result = await handleConfirm(vektorMsgId)
+        if (!result.ok) return { ok: false, error: result.error ?? 'Swap execution failed' }
+        const amount = parseFloat(json.quote.amountOutFormatted ?? '0')
+        return { ok: true, outcome: { asset: json.quote.toSymbol ?? json.parsedIntent?.output_goal ?? '', amount } }
+      }
+
+      // Rich card path (send, lend, borrow, repay, batch/split payment, etc.)
+      setMessages(prev => prev.map(m =>
+        m.id === vektorMsgId
+          ? {
+              ...m, loading: false, intentType, language: json.language ?? 'en',
+              actionLabel: json.actionLabel, text: json.message, payload: json,
+              recordId: json.recordId, phase: undefined,
+            }
+          : m,
+      ))
+
+      if (intentType === 'send' || intentType === 'contact_payment') {
+        const p = json.ptbParams as { token?: string; amount?: number } | undefined
+        const result = await handleSendSign(vektorMsgId)
+        if (!result.ok) return { ok: false, error: result.error ?? 'Send execution failed' }
+        return { ok: true, outcome: { asset: (p?.token ?? '').toUpperCase(), amount: p?.amount ?? 0 } }
+      }
+      if (intentType === 'lend' || intentType === 'borrow' || intentType === 'repay') {
+        const result = await handleNaviSign(vektorMsgId)
+        if (!result.ok) return { ok: false, error: result.error ?? 'Execution failed' }
+        return { ok: true }
+      }
+      if (intentType === 'batch_payment' || intentType === 'split_payment') {
+        const result = await handleBatchSign(vektorMsgId)
+        if (!result.ok) return { ok: false, error: result.error ?? 'Execution failed' }
+        return { ok: true }
+      }
+
+      // Read-only / no signing required (check_balance, check_price, etc.)
+      return { ok: true }
+    } catch (err: any) {
+      const errMsg = err instanceof Error ? err.message : 'Step failed'
+      setMessages(prev => prev.map(m =>
+        m.id === vektorMsgId ? { ...m, loading: false, actionLabel: '· ERROR', text: errMsg, intentType: 'error' } : m,
+      ))
+      return { ok: false, error: errMsg }
+    }
+  }
+
+  /* ── Drive a multi-step chain sequentially, pausing to ask on failure ── */
+  async function runChainFrom(
+    steps: string[],
+    startIndex: number,
+    carryOutcome?: { asset: string; amount: number },
+  ) {
+    setIsLoading(true)
+    let priorOutcome = carryOutcome
+    try {
+      for (let i = startIndex; i < steps.length; i++) {
+        const result = await runOneChainStep(steps[i], i, steps.length, priorOutcome)
+        if (!result.ok) {
+          const hasMore = i + 1 < steps.length
+          if (hasMore) setPendingChain({ steps, nextIndex: i + 1 })
+          setMessages(prev => [...prev, {
+            id: crypto.randomUUID(), role: 'vektor', intentType: 'general',
+            actionLabel: '· STEP FAILED',
+            text: hasMore
+              ? `Step ${i + 1} of ${steps.length} failed to execute: ${result.error ?? 'unknown error'}.\n\nWant me to continue with step ${i + 2}, or stop here?`
+              : `Step ${i + 1} of ${steps.length} failed to execute: ${result.error ?? 'unknown error'}.`,
+          }])
+          return
+        }
+        priorOutcome = result.outcome ?? priorOutcome
+      }
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(), role: 'vektor', intentType: 'general',
+        actionLabel: '· CHAIN · COMPLETE',
+        text: `All ${steps.length} steps completed.`,
+      }])
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   /* ── Execute a due scheduled swap — calls /api/execute-scheduled/:id ─ */
   async function executeScheduled(scheduleId: string) {
     // Use effectiveAddress so zkLogin users (no dapp-kit `account`) work too.
@@ -1563,6 +1762,10 @@ export default function App() {
           }
         : m
     ))
+    // The record was logged 'pending' the moment /api/intent returned — without
+    // this it stays stuck on 'pending' in History forever since the user never
+    // signs anything for a cancelled confirmation.
+    void reportIntentStatus(msgId, 'cancelled')
   }
 
   /* ── Build BCS bytes from a serialized PTB JSON, using the zkLogin address as sender ── */
@@ -1587,7 +1790,7 @@ export default function App() {
    * Skip when re-signing is in progress (NEED_RESIGN) — the record should stay
    * pending because execution will resume after the Google round-trip.
    */
-  async function reportIntentStatus(msgId: string, status: 'success' | 'failed') {
+  async function reportIntentStatus(msgId: string, status: 'success' | 'failed' | 'cancelled') {
     if (!effectiveAddress) return
     const recordId = messages.find(m => m.id === msgId)?.recordId
     if (!recordId) return
@@ -1601,9 +1804,9 @@ export default function App() {
     } catch { /* History status is cosmetic — never block the user on it */ }
   }
 
-  async function handleNaviSign(msgId: string) {
+  async function handleNaviSign(msgId: string): Promise<{ ok: boolean; error?: string }> {
     const msg = messages.find(m => m.id === msgId)
-    if (!msg?.payload || !effectiveAddress) return
+    if (!msg?.payload || !effectiveAddress) return { ok: false, error: 'Missing transaction data' }
 
     const intentType = msg.intentType ?? 'lend'
     const token  = (msg.payload.parsedIntent?.input_asset ?? 'SUI').toUpperCase()
@@ -1631,6 +1834,7 @@ export default function App() {
       ))
       void reportIntentStatus(msgId, 'success')
       setTimeout(refreshPortfolio, 3000)
+      return { ok: true }
     } catch (err: any) {
       const errMsg = err instanceof Error ? err.message : String(err)
       const label  = isNeedResign(err) ? '· RE-SIGNING IN…' : '· FAILED'
@@ -1638,13 +1842,14 @@ export default function App() {
         m.id === msgId ? { ...m, actionLabel: label, text: isNeedResign(err) ? errMsg : `Transaction failed: ${errMsg}` } : m
       ))
       if (!isNeedResign(err)) void reportIntentStatus(msgId, 'failed')
+      return { ok: false, error: errMsg }
     }
   }
 
   /* ── Batch / Split payment sign ──────────────────────────────────── */
-  async function handleBatchSign(msgId: string) {
+  async function handleBatchSign(msgId: string): Promise<{ ok: boolean; error?: string }> {
     const msg = messages.find(m => m.id === msgId)
-    if (!msg?.payload?.batchData || !effectiveAddress) return
+    if (!msg?.payload?.batchData || !effectiveAddress) return { ok: false, error: 'Missing transaction data' }
 
     const bd = msg.payload.batchData
 
@@ -1677,6 +1882,7 @@ export default function App() {
       ))
       void reportIntentStatus(msgId, 'success')
       setTimeout(refreshPortfolio, 3000)
+      return { ok: true }
     } catch (err: any) {
       const errMsg = err instanceof Error ? err.message : String(err)
       const label  = isNeedResign(err) ? '· RE-SIGNING IN…' : '· FAILED'
@@ -1684,14 +1890,15 @@ export default function App() {
         m.id === msgId ? { ...m, actionLabel: label, executionError: errMsg } : m
       ))
       if (!isNeedResign(err)) void reportIntentStatus(msgId, 'failed')
+      return { ok: false, error: errMsg }
     }
   }
 
   /* ── Send (single-recipient transfer) ────────────────────────────── */
-  async function handleSendSign(msgId: string) {
+  async function handleSendSign(msgId: string): Promise<{ ok: boolean; error?: string }> {
     const msg = messages.find(m => m.id === msgId)
     const p   = msg?.payload?.ptbParams as { token?: string; amount?: number; recipient?: string } | undefined
-    if (!msg || !effectiveAddress || !p?.token || !p?.amount || !p?.recipient) return
+    if (!msg || !effectiveAddress || !p?.token || !p?.amount || !p?.recipient) return { ok: false, error: 'Missing transaction data' }
 
     setMessages(prev => prev.map(m =>
       m.id === msgId ? { ...m, actionLabel: '· BUILDING · PTB' } : m
@@ -1727,6 +1934,7 @@ export default function App() {
       ))
       void reportIntentStatus(msgId, 'success')
       setTimeout(refreshPortfolio, 3000)
+      return { ok: true }
     } catch (err: any) {
       const errMsg = err instanceof Error ? err.message : String(err)
       const label  = isNeedResign(err) ? '· RE-SIGNING IN…' : '· FAILED'
@@ -1734,6 +1942,7 @@ export default function App() {
         m.id === msgId ? { ...m, actionLabel: label, executionError: errMsg } : m
       ))
       if (!isNeedResign(err)) void reportIntentStatus(msgId, 'failed')
+      return { ok: false, error: errMsg }
     }
   }
 
@@ -1779,9 +1988,9 @@ export default function App() {
   }
 
   /* ── Confirm + execute on-chain ───────────────────────────────────── */
-  async function handleConfirm(msgId: string) {
+  async function handleConfirm(msgId: string): Promise<{ ok: boolean; error?: string }> {
     const msg = messages.find(m => m.id === msgId)
-    if (!msg?.guardData?.quoteParams) return
+    if (!msg?.guardData?.quoteParams) return { ok: false, error: 'Missing transaction data' }
 
     // Show executing state
     setMessages(prev => prev.map(m =>
@@ -1817,7 +2026,9 @@ export default function App() {
       ))
       void reportIntentStatus(msgId, 'success')
       setTimeout(refreshPortfolio, 3000)
+      return { ok: true }
     } catch (err: any) {
+      const errMsg = err.message ?? 'Execution failed.'
       const label = isNeedResign(err) ? '· RE-SIGNING IN…' : '· ERROR'
       setMessages(prev => prev.map(m =>
         m.id === msgId ? {
@@ -1825,10 +2036,11 @@ export default function App() {
           loading:     false,
           phase:       'review' as const,
           actionLabel: label,
-          text:        err.message ?? 'Execution failed.',
+          text:        errMsg,
         } : m,
       ))
       if (!isNeedResign(err)) void reportIntentStatus(msgId, 'failed')
+      return { ok: false, error: errMsg }
     }
   }
 

@@ -12,7 +12,7 @@ export interface IntentRecord {
   id:        string
   type:      string
   summary:   string
-  status:    'success' | 'pending' | 'failed'
+  status:    'success' | 'pending' | 'failed' | 'cancelled'
   timestamp: string
 }
 
