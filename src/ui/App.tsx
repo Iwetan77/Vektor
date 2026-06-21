@@ -513,6 +513,47 @@ function PaymentCard({ payload, paymentId }: { payload: any; paymentId?: string 
   )
 }
 
+function InviteLinkCard({ payload }: { payload: any }) {
+  const [copied, setCopied] = useState(false)
+  const link = payload?.inviteLink ?? ''
+
+  function copy() {
+    if (!link) return
+    navigator.clipboard.writeText(link).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
+  }
+
+  return (
+    <div className="rounded-xl border border-white/5 bg-[#111118] p-5 space-y-3">
+      <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500">Invite Link</p>
+      <p className="text-sm text-slate-300 leading-relaxed">
+        Send this link to {payload?.recipient || 'a friend'} to claim {payload?.token === 'USDC' ? `$${payload?.amount} USDC` : `${payload?.amount} ${payload?.token}`}.
+      </p>
+      {link && (
+        <div className="rounded-lg bg-white/[0.03] border border-white/5 p-3 flex items-center gap-2">
+          <p className="flex-1 text-xs text-slate-400 font-mono truncate">{link}</p>
+          <button
+            onClick={copy}
+            title="Copy link"
+            className="shrink-0 flex items-center gap-1 text-[10px] text-purple-400 hover:text-purple-300 transition-colors"
+          >
+            {copied ? (
+              '✓ Copied'
+            ) : (
+              <>
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" />
+                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                </svg>
+                Copy
+              </>
+            )}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function GeneralCard({ message }: { message: string }) {
   return (
     <div className="px-4 py-3 rounded-xl border border-white/5 bg-[#111118] text-sm text-slate-300 leading-relaxed whitespace-pre-line">
@@ -821,6 +862,9 @@ function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, on
         if (it === 'conditional') return <ConditionCard payload={msg.payload} />
         if (it === 'explain_transaction') return <ExplainCard payload={msg.payload} />
         if (it === 'request_payment') return <PaymentCard payload={msg.payload} paymentId={msg.payload?.payment?.id} />
+        if (it === 'onboard') return msg.payload?.inviteLink
+          ? <InviteLinkCard payload={msg.payload} />
+          : (msg.text ? <GeneralCard message={msg.text} /> : null)
 
         if (it === 'batch_payment' || it === 'split_payment') {
           // After execution
