@@ -2505,7 +2505,7 @@ export default function App() {
               </div>
 
               <p className="text-center text-[10px] text-slate-700">
-                Routex routing · Guardian v2 · NAVI · Claude NLP · Sui mainnet
+                Routex routing · Guardian v2 · NAVI · Sui mainnet
               </p>
             </div>
           </div>

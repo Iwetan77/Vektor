@@ -22,6 +22,15 @@ function short(addr: string): string {
   return addr.length > 14 ? `${addr.slice(0, 8)}…${addr.slice(-4)}` : addr
 }
 
+// .toFixed(2) collapses small amounts (e.g. 0.0005) to "0.00", making a real
+// payment look like it sent nothing. Fall back to more decimals when the
+// 2-decimal rounding would otherwise hide a nonzero amount.
+function fmtAmount(n: number): string {
+  if (n === 0) return '0.00'
+  if (Math.abs(n) >= 0.01) return n.toFixed(2)
+  return n.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
+}
+
 export function BundleReceiptCard({ digest, token, amountPerPerson, recipients, kind = 'batch' }: BundleReceiptCardProps) {
   const list  = Array.isArray(recipients) ? recipients : []
   const count = list.length
@@ -35,7 +44,7 @@ export function BundleReceiptCard({ digest, token, amountPerPerson, recipients, 
       <div className="flex items-center gap-2">
         <span className="text-emerald-400 text-lg leading-none">✓</span>
         <span className="text-white font-semibold text-sm">
-          {kind === 'split' ? 'Split' : 'Paid'} {count} recipient{count === 1 ? '' : 's'} · {total.toFixed(2)} {sym} total
+          {kind === 'split' ? 'Split' : 'Paid'} {count} recipient{count === 1 ? '' : 's'} · {fmtAmount(total)} {sym} total
         </span>
       </div>
 
@@ -47,7 +56,7 @@ export function BundleReceiptCard({ digest, token, amountPerPerson, recipients, 
               <span className="text-slate-300 truncate">{r.name || short(r.address)}</span>
               {r.name && <span className="text-slate-600 font-mono shrink-0">{short(r.address)}</span>}
             </div>
-            <span className="text-white font-mono tabular-nums shrink-0">{per.toFixed(2)} {sym}</span>
+            <span className="text-white font-mono tabular-nums shrink-0">{fmtAmount(per)} {sym}</span>
           </div>
         ))}
       </div>

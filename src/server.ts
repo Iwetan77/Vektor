@@ -190,6 +190,15 @@ function toBaseUnits(amount: number, token: string): bigint {
   return BigInt(Math.round(amount * (TOKEN_DECIMALS[token.toUpperCase()] ?? 1e9)))
 }
 
+// .toFixed(2) collapses small amounts (e.g. 0.0005) to "0.00", making a real
+// payment look like it sent nothing. Fall back to more decimals when the
+// 2-decimal rounding would otherwise hide a nonzero amount.
+function fmtAmount(n: number): string {
+  if (n === 0) return '0.00'
+  if (Math.abs(n) >= 0.01) return n.toFixed(2)
+  return n.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
+}
+
 /**
  * Add one or more non-SUI token transfers to a transaction by explicitly
  * selecting the sender's coin objects on-chain.
@@ -1080,8 +1089,8 @@ app.post('/api/intent', async (req, res) => {
         intent_type: intent,
         parsedIntent: parsed,
         language:    lang,
-        message:     `Batch payment ready: ${members.length} recipients, ${perPersonAmount.toFixed(2)} ${token} each. Total: ${totalAmount.toFixed(2)} ${token}.`,
-        actionLabel: `· BATCH · ${members.length} × ${perPersonAmount.toFixed(2)} ${token}`,
+        message:     `Batch payment ready: ${members.length} recipients, ${fmtAmount(perPersonAmount)} ${token} each. Total: ${fmtAmount(totalAmount)} ${token}.`,
+        actionLabel: `· BATCH · ${members.length} × ${fmtAmount(perPersonAmount)} ${token}`,
         batchData: {
           groupName,
           members,

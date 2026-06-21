@@ -422642,6 +422642,11 @@ var upload = (0, import_multer.default)({ storage: import_multer.default.memoryS
 function toBaseUnits(amount, token) {
   return BigInt(Math.round(amount * (TOKEN_DECIMALS3[token.toUpperCase()] ?? 1e9)));
 }
+function fmtAmount(n) {
+  if (n === 0) return "0.00";
+  if (Math.abs(n) >= 0.01) return n.toFixed(2);
+  return n.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+}
 async function addTokenTransfers(tx, coinType, symbol, owner, transfers) {
   const network = process.env.SUI_NETWORK ?? "mainnet";
   const { SuiJsonRpcClient: SuiJsonRpcClient2, getJsonRpcFullnodeUrl: getJsonRpcFullnodeUrl2 } = await Promise.resolve().then(() => (init_jsonRpc(), jsonRpc_exports));
@@ -423465,8 +423470,8 @@ ${group.members.map((m) => `\u2022 ${m.name} \u2014 ${m.address.slice(0, 10)}\u2
         intent_type: intent,
         parsedIntent: parsed,
         language: lang,
-        message: `Batch payment ready: ${members.length} recipients, ${perPersonAmount.toFixed(2)} ${token} each. Total: ${totalAmount.toFixed(2)} ${token}.`,
-        actionLabel: `\xB7 BATCH \xB7 ${members.length} \xD7 ${perPersonAmount.toFixed(2)} ${token}`,
+        message: `Batch payment ready: ${members.length} recipients, ${fmtAmount(perPersonAmount)} ${token} each. Total: ${fmtAmount(totalAmount)} ${token}.`,
+        actionLabel: `\xB7 BATCH \xB7 ${members.length} \xD7 ${fmtAmount(perPersonAmount)} ${token}`,
         batchData: {
           groupName,
           members,
