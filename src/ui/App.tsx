@@ -52,6 +52,7 @@ interface ChatMessage {
   executedAt?:      number   // epoch ms when execution succeeded — for receipt timestamp
   language?:        string   // ISO 639-1 code of detected language
   recordId?:        string   // History record id — used to report final exec status
+  chainPrompt?:     boolean  // true ⇒ render Yes/No buttons asking whether to continue a failed chain
 }
 
 /* ─── Vektor SVG components ──────────────────────────────────────────────── */
@@ -716,9 +717,11 @@ interface BubbleProps {
   onBatchSign:  () => void
   onSendSign:   () => void
   onOnboardFundSign: () => void
+  onChainContinue: () => void
+  onChainStop:     () => void
 }
 
-function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, onSendSign, onOnboardFundSign }: BubbleProps) {
+function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, onSendSign, onOnboardFundSign, onChainContinue, onChainStop }: BubbleProps) {
   if (msg.role === 'user') {
     return (
       <div className="msg-in flex justify-end">
@@ -979,6 +982,26 @@ function MessageBubble({ msg, onFix, onConfirm, onReset, onSign, onBatchSign, on
           )
         }
 
+        if (msg.chainPrompt) return (
+          <div className="space-y-3">
+            {msg.text && <GeneralCard message={msg.text} />}
+            <div className="flex gap-2">
+              <button
+                onClick={onChainContinue}
+                className="flex-1 py-2 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/40 border border-emerald-500/30 hover:border-emerald-500/60 text-emerald-300 text-xs font-semibold transition-colors"
+              >
+                Yes, continue →
+              </button>
+              <button
+                onClick={onChainStop}
+                className="flex-1 py-2 rounded-lg bg-red-600/10 hover:bg-red-600/30 border border-red-500/30 hover:border-red-500/60 text-red-300 text-xs font-semibold transition-colors"
+              >
+                No, stop
+              </button>
+            </div>
+          </div>
+        )
+
         // Default text card
         if (msg.text) return <GeneralCard message={msg.text} />
         return null
@@ -1236,7 +1259,7 @@ export default function App() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [inviteClaim, setInviteClaim] = useState<{ amount: number; tokenSymbol: string; digest: string } | null>(null)
   // Multi-step prompt chain awaiting a continue/stop decision after a step failed.
-  const [pendingChain, setPendingChain] = useState<{ steps: string[]; nextIndex: number } | null>(null)
+  const [pendingChain, setPendingChain] = useState<{ steps: string[]; nextIndex: number; promptMsgId: string } | null>(null)
   const [echoAlerts,      setEchoAlerts]      = useState<EchoWsMessage[]>([])
   const wsRef = useRef<WebSocket | null>(null)
 
@@ -1659,21 +1682,26 @@ export default function App() {
       }
 
       if (swapTypes.includes(intentType) && json.quote && json.report) {
+        const guardData = {
+          parsedIntent: json.parsedIntent, quote: json.quote, report: json.report,
+          _rawReport: json._rawReport, quoteParams: json.quoteParams,
+        }
         setMessages(prev => prev.map(m =>
           m.id === vektorMsgId
             ? {
                 ...m, loading: false, language: json.language ?? 'en',
                 actionLabel:  buildSwapLabel(json.quote, json.report),
                 originalText: resolvedText, intentType, recordId: json.recordId,
-                guardData: {
-                  parsedIntent: json.parsedIntent, quote: json.quote, report: json.report,
-                  _rawReport: json._rawReport, quoteParams: json.quoteParams,
-                },
+                guardData,
                 phase: 'review' as const,
               }
             : m,
         ))
-        const result = await handleConfirm(vektorMsgId)
+        // Pass the message directly — `messages` state in this closure won't reflect
+        // the setMessages call above until the next render, so handleConfirm's own
+        // `messages.find(...)` lookup would miss this message and falsely report
+        // "Missing transaction data" even though the swap is about to be built fine.
+        const result = await handleConfirm(vektorMsgId, { id: vektorMsgId, role: 'vektor', guardData })
         if (!result.ok) return { ok: false, error: result.error ?? 'Swap execution failed' }
         const amount = parseFloat(json.quote.amountOutFormatted ?? '0')
         return { ok: true, outcome: { asset: json.quote.toSymbol ?? json.parsedIntent?.output_goal ?? '', amount } }
@@ -1692,17 +1720,17 @@ export default function App() {
 
       if (intentType === 'send' || intentType === 'contact_payment') {
         const p = json.ptbParams as { token?: string; amount?: number } | undefined
-        const result = await handleSendSign(vektorMsgId)
+        const result = await handleSendSign(vektorMsgId, { id: vektorMsgId, role: 'vektor', intentType, payload: json })
         if (!result.ok) return { ok: false, error: result.error ?? 'Send execution failed' }
         return { ok: true, outcome: { asset: (p?.token ?? '').toUpperCase(), amount: p?.amount ?? 0 } }
       }
       if (intentType === 'lend' || intentType === 'borrow' || intentType === 'repay') {
-        const result = await handleNaviSign(vektorMsgId)
+        const result = await handleNaviSign(vektorMsgId, { id: vektorMsgId, role: 'vektor', intentType, payload: json })
         if (!result.ok) return { ok: false, error: result.error ?? 'Execution failed' }
         return { ok: true }
       }
       if (intentType === 'batch_payment' || intentType === 'split_payment') {
-        const result = await handleBatchSign(vektorMsgId)
+        const result = await handleBatchSign(vektorMsgId, { id: vektorMsgId, role: 'vektor', intentType, payload: json })
         if (!result.ok) return { ok: false, error: result.error ?? 'Execution failed' }
         return { ok: true }
       }
@@ -1730,11 +1758,13 @@ export default function App() {
       for (let i = startIndex; i < steps.length; i++) {
         const result = await runOneChainStep(steps[i], i, steps.length, priorOutcome)
         if (!result.ok) {
-          const hasMore = i + 1 < steps.length
-          if (hasMore) setPendingChain({ steps, nextIndex: i + 1 })
+          const hasMore   = i + 1 < steps.length
+          const promptId  = crypto.randomUUID()
+          if (hasMore) setPendingChain({ steps, nextIndex: i + 1, promptMsgId: promptId })
           setMessages(prev => [...prev, {
-            id: crypto.randomUUID(), role: 'vektor', intentType: 'general',
+            id: promptId, role: 'vektor', intentType: 'general',
             actionLabel: '· STEP FAILED',
+            chainPrompt: hasMore,
             text: hasMore
               ? `Step ${i + 1} of ${steps.length} failed to execute: ${result.error ?? 'unknown error'}.\n\nWant me to continue with step ${i + 2}, or stop here?`
               : `Step ${i + 1} of ${steps.length} failed to execute: ${result.error ?? 'unknown error'}.`,
@@ -1751,6 +1781,31 @@ export default function App() {
     } finally {
       setIsLoading(false)
     }
+  }
+
+  /* ── Yes/No buttons on a "step failed — continue?" prompt ───────────── */
+  function handleChainContinue() {
+    const chain = pendingChain
+    if (!chain) return
+    setPendingChain(null)
+    setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'user', text: 'Continue' }])
+    void runChainFrom(chain.steps, chain.nextIndex)
+  }
+
+  function handleChainStop() {
+    const chain = pendingChain
+    if (!chain) return
+    setPendingChain(null)
+    const remaining = chain.steps.length - chain.nextIndex
+    setMessages(prev => [
+      ...prev,
+      { id: crypto.randomUUID(), role: 'user', text: 'Stop' },
+      {
+        id: crypto.randomUUID(), role: 'vektor', intentType: 'general',
+        actionLabel: '· CHAIN · STOPPED',
+        text: `Okay — stopped. ${remaining} remaining step${remaining === 1 ? '' : 's'} cancelled.`,
+      },
+    ])
   }
 
   /* ── Execute a due scheduled swap — calls /api/execute-scheduled/:id ─ */
@@ -1884,8 +1939,8 @@ export default function App() {
     } catch { /* History status is cosmetic — never block the user on it */ }
   }
 
-  async function handleNaviSign(msgId: string): Promise<{ ok: boolean; error?: string }> {
-    const msg = messages.find(m => m.id === msgId)
+  async function handleNaviSign(msgId: string, overrideMsg?: ChatMessage): Promise<{ ok: boolean; error?: string }> {
+    const msg = overrideMsg ?? messages.find(m => m.id === msgId)
     if (!msg?.payload || !effectiveAddress) return { ok: false, error: 'Missing transaction data' }
 
     const intentType = msg.intentType ?? 'lend'
@@ -1927,8 +1982,8 @@ export default function App() {
   }
 
   /* ── Batch / Split payment sign ──────────────────────────────────── */
-  async function handleBatchSign(msgId: string): Promise<{ ok: boolean; error?: string }> {
-    const msg = messages.find(m => m.id === msgId)
+  async function handleBatchSign(msgId: string, overrideMsg?: ChatMessage): Promise<{ ok: boolean; error?: string }> {
+    const msg = overrideMsg ?? messages.find(m => m.id === msgId)
     if (!msg?.payload?.batchData || !effectiveAddress) return { ok: false, error: 'Missing transaction data' }
 
     const bd = msg.payload.batchData
@@ -1975,8 +2030,8 @@ export default function App() {
   }
 
   /* ── Send (single-recipient transfer) ────────────────────────────── */
-  async function handleSendSign(msgId: string): Promise<{ ok: boolean; error?: string }> {
-    const msg = messages.find(m => m.id === msgId)
+  async function handleSendSign(msgId: string, overrideMsg?: ChatMessage): Promise<{ ok: boolean; error?: string }> {
+    const msg = overrideMsg ?? messages.find(m => m.id === msgId)
     const p   = msg?.payload?.ptbParams as { token?: string; amount?: number; recipient?: string } | undefined
     if (!msg || !effectiveAddress || !p?.token || !p?.amount || !p?.recipient) return { ok: false, error: 'Missing transaction data' }
 
@@ -2133,8 +2188,12 @@ export default function App() {
   }
 
   /* ── Confirm + execute on-chain ───────────────────────────────────── */
-  async function handleConfirm(msgId: string): Promise<{ ok: boolean; error?: string }> {
-    const msg = messages.find(m => m.id === msgId)
+  async function handleConfirm(msgId: string, overrideMsg?: ChatMessage): Promise<{ ok: boolean; error?: string }> {
+    // overrideMsg lets callers that just wrote this message via setMessages (e.g. the
+    // chain runner) hand it over directly — `messages` in this closure is a snapshot
+    // from this render and won't see a setMessages update queued moments ago, which
+    // made chained swaps fail with "Missing transaction data" right after succeeding.
+    const msg = overrideMsg ?? messages.find(m => m.id === msgId)
     if (!msg?.guardData?.quoteParams) return { ok: false, error: 'Missing transaction data' }
 
     // Show executing state
@@ -2492,6 +2551,8 @@ export default function App() {
                   onBatchSign={() => handleBatchSign(msg.id)}
                   onSendSign={() => handleSendSign(msg.id)}
                   onOnboardFundSign={() => handleOnboardFundSign(msg.id)}
+                  onChainContinue={handleChainContinue}
+                  onChainStop={handleChainStop}
                 />
               ))}
 
