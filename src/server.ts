@@ -734,11 +734,22 @@ app.post('/api/intent', async (req, res) => {
       const amount       = parsed.input_amount ?? 0
       const rawRecipient = parsed.recipient ?? ''
 
-      // Resolution order: raw 0x → SuiNS name → existing contact lookup
+      // Resolution order: raw 0x → existing contact (incl. a hallucinated ".sui"
+      // suffix stripped — the parser sometimes guesses ".sui" on plain names) → SuiNS name.
+      // Saved contacts take priority: a user who saved "ebube" should never see a SuiNS
+      // resolution error just because the parser appended ".sui" to their literal text.
       let recipient   = rawRecipient
       let displayName = ''
       if (!/^0x[0-9a-fA-F]{1,64}$/.test(rawRecipient)) {
-        if (isSuiName(rawRecipient)) {
+        const bareCandidate = rawRecipient.replace(/^@/, '').replace(/\.sui$/i, '')
+        const contactAddr = (rawRecipient && sender !== SIM_ADDR)
+          ? await lookupContact(sender, rawRecipient).catch(() => null)
+            ?? (bareCandidate !== rawRecipient ? await lookupContact(sender, bareCandidate).catch(() => null) : null)
+          : null
+        if (contactAddr) {
+          recipient   = contactAddr
+          displayName = bareCandidate
+        } else if (isSuiName(rawRecipient)) {
           const resolved = await resolveSuiName(rawRecipient)
           if (!resolved) {
             markFailed()
@@ -747,9 +758,6 @@ app.post('/api/intent', async (req, res) => {
           }
           recipient   = resolved
           displayName = rawRecipient.startsWith('@') ? rawRecipient.slice(1) + '.sui' : rawRecipient.toLowerCase()
-        } else if (rawRecipient && sender !== SIM_ADDR) {
-          const contactAddr = await lookupContact(sender, rawRecipient).catch(() => null)
-          if (contactAddr) { recipient = contactAddr; displayName = rawRecipient }
         }
       } else {
         // Raw 0x — try reverse SuiNS lookup so the confirmation shows "name.sui (0x..)"
@@ -805,19 +813,26 @@ app.post('/api/intent', async (req, res) => {
         return
       }
 
-      // Resolution order: raw 0x → SuiNS name → existing contact lookup
+      // Resolution order: raw 0x → existing contact (incl. a hallucinated ".sui"
+      // suffix stripped) → SuiNS name. Saved contacts take priority — see the
+      // matching comment in the 'send' branch above for why.
       let resolvedAddress: string | null = null
+      const bareCandidate = recipientName.replace(/^@/, '').replace(/\.sui$/i, '')
       if (/^0x[0-9a-fA-F]{1,64}$/.test(recipientName)) {
         resolvedAddress = recipientName
-      } else if (isSuiName(recipientName)) {
+      } else if (sender !== SIM_ADDR) {
+        resolvedAddress = await lookupContact(sender, recipientName).catch(() => null)
+        if (!resolvedAddress && bareCandidate !== recipientName) {
+          resolvedAddress = await lookupContact(sender, bareCandidate).catch(() => null)
+        }
+      }
+      if (!resolvedAddress && isSuiName(recipientName)) {
         resolvedAddress = await resolveSuiName(recipientName)
         if (!resolvedAddress) {
           markFailed()
           res.json({ ok: false, error: `Couldn't resolve ${recipientName} — that SuiNS name isn't registered.`, language: lang })
           return
         }
-      } else if (sender !== SIM_ADDR) {
-        resolvedAddress = await lookupContact(sender, recipientName).catch(() => null)
       }
 
       if (!resolvedAddress) {

@@ -422891,7 +422891,12 @@ ${txSummary}`;
       let recipient = rawRecipient;
       let displayName = "";
       if (!/^0x[0-9a-fA-F]{1,64}$/.test(rawRecipient)) {
-        if (isSuiName(rawRecipient)) {
+        const bareCandidate = rawRecipient.replace(/^@/, "").replace(/\.sui$/i, "");
+        const contactAddr = rawRecipient && sender !== SIM_ADDR2 ? await lookupContact(sender, rawRecipient).catch(() => null) ?? (bareCandidate !== rawRecipient ? await lookupContact(sender, bareCandidate).catch(() => null) : null) : null;
+        if (contactAddr) {
+          recipient = contactAddr;
+          displayName = bareCandidate;
+        } else if (isSuiName(rawRecipient)) {
           const resolved = await resolveSuiName(rawRecipient);
           if (!resolved) {
             markFailed();
@@ -422900,12 +422905,6 @@ ${txSummary}`;
           }
           recipient = resolved;
           displayName = rawRecipient.startsWith("@") ? rawRecipient.slice(1) + ".sui" : rawRecipient.toLowerCase();
-        } else if (rawRecipient && sender !== SIM_ADDR2) {
-          const contactAddr = await lookupContact(sender, rawRecipient).catch(() => null);
-          if (contactAddr) {
-            recipient = contactAddr;
-            displayName = rawRecipient;
-          }
         }
       } else {
         const rev = await reverseSuiName(rawRecipient).catch(() => null);
@@ -422958,17 +422957,22 @@ ${txSummary}`;
         return;
       }
       let resolvedAddress = null;
+      const bareCandidate = recipientName.replace(/^@/, "").replace(/\.sui$/i, "");
       if (/^0x[0-9a-fA-F]{1,64}$/.test(recipientName)) {
         resolvedAddress = recipientName;
-      } else if (isSuiName(recipientName)) {
+      } else if (sender !== SIM_ADDR2) {
+        resolvedAddress = await lookupContact(sender, recipientName).catch(() => null);
+        if (!resolvedAddress && bareCandidate !== recipientName) {
+          resolvedAddress = await lookupContact(sender, bareCandidate).catch(() => null);
+        }
+      }
+      if (!resolvedAddress && isSuiName(recipientName)) {
         resolvedAddress = await resolveSuiName(recipientName);
         if (!resolvedAddress) {
           markFailed();
           res.json({ ok: false, error: `Couldn't resolve ${recipientName} \u2014 that SuiNS name isn't registered.`, language: lang });
           return;
         }
-      } else if (sender !== SIM_ADDR2) {
-        resolvedAddress = await lookupContact(sender, recipientName).catch(() => null);
       }
       if (!resolvedAddress) {
         const askEn = `I don't have an address saved for "${recipientName}". What's their wallet address?`;
