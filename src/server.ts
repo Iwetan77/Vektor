@@ -199,6 +199,14 @@ function fmtAmount(n: number): string {
   return n.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
 }
 
+// Normalizes a token symbol however the user/parser wrote it ("$wal", "wAl",
+// " WAL ") down to the canonical uppercase form ("WAL") used everywhere a
+// symbol is looked up (TOKEN_DECIMALS, KNOWN_TOKEN_SYMBOLS, routex, etc).
+function normalizeTokenSymbol<T extends string | null | undefined>(s: T): T {
+  if (!s) return s
+  return s.trim().replace(/^\$/, '').toUpperCase() as T
+}
+
 /**
  * Add one or more non-SUI token transfers to a transaction by explicitly
  * selecting the sender's coin objects on-chain.
@@ -490,6 +498,12 @@ app.post('/api/intent', async (req, res) => {
     const memCtx  = sender !== SIM_ADDR ? buildMemoryContext(sender) : undefined
     const parsed  = await parseIntent(text, memCtx)
 
+    // Normalize token-symbol fields ("$wal", "wAl" → "WAL") before anything
+    // downstream compares them against TOKEN_DECIMALS / KNOWN_TOKEN_SYMBOLS /
+    // the routex registry — those all expect the canonical uppercase form.
+    parsed.input_asset = normalizeTokenSymbol(parsed.input_asset)
+    parsed.output_goal  = normalizeTokenSymbol(parsed.output_goal)
+
     // ── Post-parse validation gate ─────────────────────────────────────
     // Catches missing amounts, same-token swaps, missing recipients/triggers
     // BEFORE we quote / build / sign anything. Pure function — see
@@ -512,15 +526,15 @@ app.post('/api/intent', async (req, res) => {
       'LOFI', 'BLUB', 'OCEAN', 'HIPPO', 'FUD', 'BONK', 'MEME',
     ])
     if (parsed.intent_type === 'send' || parsed.intent_type === 'contact_payment') {
-      const target = (
+      const target = normalizeTokenSymbol(
         parsed.recipient ??
         (parsed as any).recipient_name ??
         parsed.output_goal ??
         ''
-      ).toUpperCase()
+      )
       if (KNOWN_TOKEN_SYMBOLS.has(target)) {
         // Same-token guard — don't silently turn "send N USDC to USDC" into a wasteful USDC→USDC swap.
-        const source = (parsed.input_asset ?? '').toUpperCase()
+        const source = normalizeTokenSymbol(parsed.input_asset ?? '')
         if (source && source === target) {
           // Leave intent_type as 'send' with no recipient so the send handler rejects cleanly below.
           // (Handled by the unified send-resolution path: no 0x, not a SuiNS name, not a contact → asks for a recipient.)

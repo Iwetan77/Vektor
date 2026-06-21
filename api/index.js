@@ -422647,6 +422647,10 @@ function fmtAmount(n) {
   if (Math.abs(n) >= 0.01) return n.toFixed(2);
   return n.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
 }
+function normalizeTokenSymbol(s) {
+  if (!s) return s;
+  return s.trim().replace(/^\$/, "").toUpperCase();
+}
 async function addTokenTransfers(tx, coinType, symbol, owner, transfers) {
   const network = process.env.SUI_NETWORK ?? "mainnet";
   const { SuiJsonRpcClient: SuiJsonRpcClient2, getJsonRpcFullnodeUrl: getJsonRpcFullnodeUrl2 } = await Promise.resolve().then(() => (init_jsonRpc(), jsonRpc_exports));
@@ -422863,6 +422867,8 @@ app.post("/api/intent", async (req, res) => {
     }
     const memCtx = sender !== SIM_ADDR2 ? buildMemoryContext(sender) : void 0;
     const parsed = await parseIntent(text, memCtx);
+    parsed.input_asset = normalizeTokenSymbol(parsed.input_asset);
+    parsed.output_goal = normalizeTokenSymbol(parsed.output_goal);
     {
       const v = validateIntent(parsed);
       if (!v.ok) {
@@ -422903,9 +422909,11 @@ app.post("/api/intent", async (req, res) => {
       "MEME"
     ]);
     if (parsed.intent_type === "send" || parsed.intent_type === "contact_payment") {
-      const target = (parsed.recipient ?? parsed.recipient_name ?? parsed.output_goal ?? "").toUpperCase();
+      const target = normalizeTokenSymbol(
+        parsed.recipient ?? parsed.recipient_name ?? parsed.output_goal ?? ""
+      );
       if (KNOWN_TOKEN_SYMBOLS2.has(target)) {
-        const source = (parsed.input_asset ?? "").toUpperCase();
+        const source = normalizeTokenSymbol(parsed.input_asset ?? "");
         if (source && source === target) {
           parsed.recipient = null;
           parsed.recipient_name = null;
