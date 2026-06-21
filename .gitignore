@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-ui/
+api/index.js
 app/
 contracts/vektorlog/build/
 echo-contracts/build/
