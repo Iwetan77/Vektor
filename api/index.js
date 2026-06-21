@@ -417468,6 +417468,24 @@ async function addGroupMember(wallet, groupName, member) {
   await saveContacts(wallet, data);
   return true;
 }
+async function removeGroup(wallet, groupName) {
+  const data = await loadContacts(wallet);
+  const before = data.groups.length;
+  data.groups = data.groups.filter((g) => g.name.toLowerCase() !== groupName.toLowerCase());
+  if (data.groups.length === before) return false;
+  await saveContacts(wallet, data);
+  return true;
+}
+async function removeGroupMember(wallet, groupName, memberName) {
+  const data = await loadContacts(wallet);
+  const group = data.groups.find((g) => g.name.toLowerCase() === groupName.toLowerCase());
+  if (!group) return false;
+  const before = group.members.length;
+  group.members = group.members.filter((m) => m.name.toLowerCase() !== memberName.toLowerCase());
+  if (group.members.length === before) return false;
+  await saveContacts(wallet, data);
+  return true;
+}
 async function listGroups(wallet) {
   return (await loadContacts(wallet)).groups;
 }
@@ -418526,7 +418544,8 @@ Intent types (pick the most specific):
   batch_payment    \u2014 pay all members of a named group: "pay my staff 500 USDC each", "pay all contractors 150 USDC". Set group_name.
   split_payment    \u2014 split an amount among a named group: "split 1000 USDC among my staff". Set group_name.
   manage_contacts  \u2014 /contact add, /contact remove, /contact list \u2014 extract the subcommand in inferred_steps
-  manage_groups    \u2014 /group create, /group add, /group list \u2014 extract the subcommand in inferred_steps
+  manage_groups    \u2014 /group create, /group add, /group remove, /group list, /group show \u2014 extract the subcommand in inferred_steps.
+    "delete/remove my staff group", "delete the Family and friends group" \u2192 inferred_steps[0] = "remove", inferred_steps[1] = group name
 
 CRITICAL classification rules:
   swap vs send \u2014 MOST IMPORTANT RULE: if the "to" / "for" target is a known token symbol
@@ -423363,6 +423382,23 @@ ${groups.map((g) => `\u2022 ${g.name} (${g.members.length} members)`).join("\n")
         res.json({ ok: true, intent_type: intent, parsedIntent: parsed, language: lang, message: createMsg, group, actionLabel: `\xB7 GROUP CREATED \xB7 ${groupName}` });
         return;
       }
+      if (sub3 === "remove" || sub3 === "delete") {
+        const groupName = steps[1] ?? "";
+        if (!groupName) {
+          res.json({ ok: false, error: "Which group should I remove?", language: lang });
+          return;
+        }
+        const removed = sender !== SIM_ADDR2 ? await removeGroup(sender, groupName).catch(() => false) : false;
+        const delEn = removed ? `Removed the group "${groupName}".` : `No group named "${groupName}" found.`;
+        const delMsg = lang === "en" ? delEn : await complete({
+          system: "You are Vektor. Translate this message exactly.",
+          prompt: delEn,
+          maxTokens: 80,
+          lang
+        }).catch(() => delEn);
+        res.json({ ok: true, intent_type: intent, parsedIntent: parsed, language: lang, message: delMsg, actionLabel: removed ? `\xB7 GROUP REMOVED \xB7 ${groupName}` : "\xB7 NOT FOUND" });
+        return;
+      }
       if (sub3 === "show") {
         const groupName = steps[1] ?? "";
         const group = sender !== SIM_ADDR2 ? await lookupGroup(sender, groupName).catch(() => null) : null;
@@ -423382,7 +423418,7 @@ ${group.members.map((m) => `\u2022 ${m.name} \u2014 ${m.address.slice(0, 10)}\u2
         intent_type: intent,
         parsedIntent: parsed,
         language: lang,
-        message: 'Group commands:\n\u2022 /group create "Name" with Alice, Bob\n\u2022 /group show "Name"\n\u2022 /group list',
+        message: 'Group commands:\n\u2022 /group create "Name" with Alice, Bob\n\u2022 /group show "Name"\n\u2022 /group list\n\u2022 /group remove "Name"',
         actionLabel: "\xB7 GROUPS"
       });
       return;
@@ -424410,6 +424446,26 @@ app.post("/api/groups/:wallet/:groupName/members", requireWalletSigOrZkLogin(), 
     }
     const ok = await addGroupMember(req.params.wallet, decodeURIComponent(req.params.groupName), { name, address: r.address });
     res.json({ ok });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+app.delete("/api/groups/:wallet/:groupName", requireWalletSigOrZkLogin(), async (req, res) => {
+  try {
+    const removed = await removeGroup(req.params.wallet, decodeURIComponent(req.params.groupName));
+    res.json({ ok: removed });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+app.delete("/api/groups/:wallet/:groupName/members/:memberName", requireWalletSigOrZkLogin(), async (req, res) => {
+  try {
+    const removed = await removeGroupMember(
+      req.params.wallet,
+      decodeURIComponent(req.params.groupName),
+      decodeURIComponent(req.params.memberName)
+    );
+    res.json({ ok: removed });
   } catch (err) {
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
   }

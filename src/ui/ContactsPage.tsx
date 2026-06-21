@@ -79,6 +79,13 @@ export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
   const [creatingGroup,  setCreatingGroup]  = useState(false)
   const [groupErr,       setGroupErr]       = useState<string | null>(null)
 
+  /* ─ Add member to an existing group ─ */
+  const [addMemberFor,    setAddMemberFor]    = useState<string | null>(null) // group name with the row open
+  const [newMemberName,   setNewMemberName]   = useState('')
+  const [newMemberAddr,   setNewMemberAddr]   = useState('')
+  const [addMemberErr,    setAddMemberErr]    = useState<string | null>(null)
+  const [addingMember,    setAddingMember]    = useState(false)
+
   async function load() {
     setLoading(true)
     setError(null)
@@ -174,6 +181,45 @@ export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
       setGroupErr(err.message ?? 'Failed to create group.')
     } finally {
       setCreatingGroup(false)
+    }
+  }
+
+  /* ─── Delete group ────────────────────────────────────────────────────── */
+  async function handleDeleteGroup(name: string) {
+    await signedFetch(`/api/groups/${wallet}/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    setGroups(prev => prev.filter(g => g.name !== name))
+  }
+
+  /* ─── Remove a single member from a group ───────────────────────────── */
+  async function handleRemoveMember(groupNm: string, memberName: string) {
+    await signedFetch(`/api/groups/${wallet}/${encodeURIComponent(groupNm)}/members/${encodeURIComponent(memberName)}`, { method: 'DELETE' })
+    setGroups(prev => prev.map(g =>
+      g.name === groupNm ? { ...g, members: g.members.filter(m => m.name !== memberName) } : g
+    ))
+  }
+
+  /* ─── Add a member to an existing group ──────────────────────────────── */
+  async function handleAddMember(e: React.FormEvent, groupNm: string) {
+    e.preventDefault()
+    setAddMemberErr(null)
+    const name = newMemberName.trim()
+    const addr = newMemberAddr.trim()
+    if (!name || !addr) { setAddMemberErr('Name and address are required.'); return }
+    if (!isValidRecipient(addr)) { setAddMemberErr('Enter a 0x Sui address or a SuiNS name (e.g. mum.sui).'); return }
+    setAddingMember(true)
+    try {
+      const res  = await signedFetch(`/api/groups/${wallet}/${encodeURIComponent(groupNm)}/members`, {
+        method: 'POST',
+        body:   JSON.stringify({ name, address: addr }),
+      })
+      const json = await res.json()
+      if (!json.ok) throw new Error(json.error ?? 'Failed to add member')
+      setNewMemberName(''); setNewMemberAddr(''); setAddMemberFor(null)
+      await load()
+    } catch (err: any) {
+      setAddMemberErr(err.message ?? 'Failed to add member.')
+    } finally {
+      setAddingMember(false)
     }
   }
 
@@ -371,16 +417,75 @@ export function ContactsPage({ wallet, onClose }: ContactsPageProps) {
                     <div key={g.name} className="rounded-xl bg-[#111118] p-4 space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="text-sm font-semibold text-white">{g.name}</span>
-                        <span className="text-[10px] text-slate-600">{g.members.length} members</span>
+                        <div className="flex items-center gap-3 shrink-0">
+                          <span className="text-[10px] text-slate-600">{g.members.length} members</span>
+                          <button
+                            onClick={() => handleDeleteGroup(g.name)}
+                            className="text-[10px] text-slate-600 hover:text-red-400 transition-colors"
+                          >
+                            delete
+                          </button>
+                        </div>
                       </div>
                       <div className="space-y-1">
                         {g.members.map(m => (
-                          <div key={m.name} className="flex items-center justify-between text-xs">
+                          <div key={m.name} className="flex items-center justify-between text-xs group">
                             <span className="text-slate-400">{m.name}</span>
-                            <span className="text-slate-600 font-mono">{truncateAddr(m.address)}</span>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="text-slate-600 font-mono">{truncateAddr(m.address)}</span>
+                              <button
+                                onClick={() => handleRemoveMember(g.name, m.name)}
+                                className="text-slate-700 hover:text-red-400 transition-colors"
+                                title={`Remove ${m.name}`}
+                              >
+                                ✕
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>
+
+                      {addMemberFor === g.name ? (
+                        <form onSubmit={e => handleAddMember(e, g.name)} className="flex items-center gap-2 pt-1">
+                          <input
+                            value={newMemberName}
+                            onChange={e => setNewMemberName(e.target.value)}
+                            placeholder="Name"
+                            autoFocus
+                            className="w-24 shrink-0 bg-white/5 border border-white/8 rounded-lg px-2 py-1.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-purple-500/40"
+                          />
+                          <input
+                            value={newMemberAddr}
+                            onChange={e => setNewMemberAddr(e.target.value)}
+                            placeholder="0x… or name.sui"
+                            className="flex-1 min-w-0 bg-white/5 border border-white/8 rounded-lg px-2 py-1.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-purple-500/40 font-mono"
+                          />
+                          <button
+                            type="submit"
+                            disabled={addingMember}
+                            className="px-2 py-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/30 text-purple-300 text-xs font-semibold transition-colors disabled:opacity-40 shrink-0"
+                          >
+                            {addingMember ? '…' : 'Add'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setAddMemberFor(null); setAddMemberErr(null) }}
+                            className="text-slate-600 hover:text-slate-400 text-xs shrink-0"
+                          >
+                            ✕
+                          </button>
+                        </form>
+                      ) : (
+                        <button
+                          onClick={() => { setAddMemberFor(g.name); setNewMemberName(''); setNewMemberAddr(''); setAddMemberErr(null) }}
+                          className="text-xs text-slate-500 hover:text-purple-400 transition-colors"
+                        >
+                          + Add member
+                        </button>
+                      )}
+                      {addMemberFor === g.name && addMemberErr && (
+                        <p className="text-xs text-red-400">{addMemberErr}</p>
+                      )}
                     </div>
                   ))}
                 </div>

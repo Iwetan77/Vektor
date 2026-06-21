@@ -37,7 +37,7 @@ async function loadRoutex() {
 import { complete, activeProvider, LANG_NAMES, SUPPORTED_LANGS } from './ai/client.js'
 import {
   loadContacts, addContact, removeContact, listContacts, lookupContact,
-  createGroup, addGroupMember, listGroups, lookupGroup, resolveGroupMembers,
+  createGroup, addGroupMember, removeGroup, removeGroupMember, listGroups, lookupGroup, resolveGroupMembers,
   incrementPaymentCount,
 } from './contacts/index.js'
 import { isSuiName, resolveSuiName, reverseSuiName } from './suins/resolver.js'
@@ -994,6 +994,19 @@ app.post('/api/intent', async (req, res) => {
         return
       }
 
+      if (sub === 'remove' || sub === 'delete') {
+        const groupName = steps[1] ?? ''
+        if (!groupName) { res.json({ ok: false, error: 'Which group should I remove?', language: lang }); return }
+        const removed = sender !== SIM_ADDR ? await removeGroup(sender, groupName).catch(() => false) : false
+        const delEn = removed ? `Removed the group "${groupName}".` : `No group named "${groupName}" found.`
+        const delMsg = lang === 'en' ? delEn : await complete({
+          system: 'You are Vektor. Translate this message exactly.',
+          prompt: delEn, maxTokens: 80, lang,
+        }).catch(() => delEn)
+        res.json({ ok: true, intent_type: intent, parsedIntent: parsed, language: lang, message: delMsg, actionLabel: removed ? `· GROUP REMOVED · ${groupName}` : '· NOT FOUND' })
+        return
+      }
+
       if (sub === 'show') {
         const groupName = steps[1] ?? ''
         const group = sender !== SIM_ADDR ? await lookupGroup(sender, groupName).catch(() => null) : null
@@ -1010,7 +1023,7 @@ app.post('/api/intent', async (req, res) => {
 
       res.json({
         ok: true, intent_type: intent, parsedIntent: parsed, language: lang,
-        message: 'Group commands:\n• /group create "Name" with Alice, Bob\n• /group show "Name"\n• /group list',
+        message: 'Group commands:\n• /group create "Name" with Alice, Bob\n• /group show "Name"\n• /group list\n• /group remove "Name"',
         actionLabel: '· GROUPS',
       })
       return
@@ -2171,6 +2184,28 @@ app.post('/api/groups/:wallet/:groupName/members', requireWalletSigOrZkLogin(), 
     if (!r.ok) { res.status(400).json({ ok: false, error: r.error }); return }
     const ok = await addGroupMember(req.params.wallet, decodeURIComponent(req.params.groupName), { name, address: r.address })
     res.json({ ok })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) })
+  }
+})
+
+app.delete('/api/groups/:wallet/:groupName', requireWalletSigOrZkLogin(), async (req, res) => {
+  try {
+    const removed = await removeGroup(req.params.wallet, decodeURIComponent(req.params.groupName))
+    res.json({ ok: removed })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) })
+  }
+})
+
+app.delete('/api/groups/:wallet/:groupName/members/:memberName', requireWalletSigOrZkLogin(), async (req, res) => {
+  try {
+    const removed = await removeGroupMember(
+      req.params.wallet,
+      decodeURIComponent(req.params.groupName),
+      decodeURIComponent(req.params.memberName),
+    )
+    res.json({ ok: removed })
   } catch (err) {
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) })
   }

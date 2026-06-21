@@ -146,6 +146,15 @@ export async function addGroupMember(
   return true
 }
 
+export async function removeGroup(wallet: string, groupName: string): Promise<boolean> {
+  const data = await loadContacts(wallet)
+  const before = data.groups.length
+  data.groups = data.groups.filter(g => g.name.toLowerCase() !== groupName.toLowerCase())
+  if (data.groups.length === before) return false
+  await saveContacts(wallet, data)
+  return true
+}
+
 export async function removeGroupMember(
   wallet: string,
   groupName: string,

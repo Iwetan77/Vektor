@@ -45,7 +45,8 @@ Intent types (pick the most specific):
   batch_payment    — pay all members of a named group: "pay my staff 500 USDC each", "pay all contractors 150 USDC". Set group_name.
   split_payment    — split an amount among a named group: "split 1000 USDC among my staff". Set group_name.
   manage_contacts  — /contact add, /contact remove, /contact list — extract the subcommand in inferred_steps
-  manage_groups    — /group create, /group add, /group list — extract the subcommand in inferred_steps
+  manage_groups    — /group create, /group add, /group remove, /group list, /group show — extract the subcommand in inferred_steps.
+    "delete/remove my staff group", "delete the Family and friends group" → inferred_steps[0] = "remove", inferred_steps[1] = group name
 
 CRITICAL classification rules:
   swap vs send — MOST IMPORTANT RULE: if the "to" / "for" target is a known token symbol
