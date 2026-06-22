@@ -2,7 +2,7 @@ node_modules/
 dist/
 dist-ui/
 app/
-contracts/vektorlog/build/
+contracts/*/build/
 echo-contracts/build/
 .env*
 !.env.example
