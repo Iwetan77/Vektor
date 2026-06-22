@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2024.beta"
 
 [addresses]
-vektorlog = "0x0"
+vektorlog = "0xe6db548d9064223e676aed600bc343a82ec041711846bbba5f5c303ff1906f0e"

@@ -2502,10 +2502,68 @@ app.post('/api/transcribe', async (req, res) => {
 
 /* ─── Echo API ────────────────────────────────────────────────────────── */
 
-// GET /api/echo/:wallet — load full Echo state
+// GET /api/echo/:wallet — load full Echo state.
+//
+// The Echo dashboard (Watching / Scheduled / Positions) must reflect the SAME
+// conditions, DCA schedules, and memecoin positions the chat flow creates — those
+// live in the db/store (monitored by runConditionTick / the scheduler), NOT in the
+// Walrus EchoUserData blob. We read the persisted Echo blob for rules / session key
+// / score / activity, then overlay the live store so a condition you set in chat
+// actually shows up under "Watching" instead of the tabs sitting empty.
 app.get('/api/echo/:wallet', async (req, res) => {
   try {
-    const data = await readEchoData(req.params.wallet)
+    const wallet = req.params.wallet
+    // Make sure a cold lambda sees conditions/schedules written by another instance.
+    await syncStoreFromKV().catch(() => {})
+    const data = await readEchoData(wallet)
+
+    // ── Live conditions → Watching panel (WatchCondition[]) ──
+    data.conditions = getConditions(wallet)
+      .filter(c => !c.fired)
+      .map(c => ({
+        id:           c.id,
+        raw:          c.description,
+        asset:        c.trigger.asset,
+        currentPrice: getCurrentPrice(c.trigger.asset) ?? 0,
+        triggerPrice: c.trigger.threshold,
+        direction:    c.trigger.type === 'price_above' ? 'above' : 'below',
+        intent:       c.action?.output_goal
+          ? `${c.action.input_asset ?? ''} → ${c.action.output_goal}`.trim()
+          : c.description,
+        active:       !c.fired,
+        createdAt:    new Date(c.createdAt).getTime(),
+      }))
+
+    // ── Live DCA / scheduled intents → Scheduled panel ──
+    data.scheduledIntents = getScheduled(wallet)
+      .filter(s => s.active)
+      .map(s => ({
+        id:                  s.id,
+        raw:                 s.targetToken
+          ? `${s.type.toUpperCase()} ${s.amount} ${s.token} → ${s.targetToken}`
+          : `${s.type} ${s.amount} ${s.token}`,
+        frequency:           s.schedule.frequency,
+        nextExecution:       new Date(s.schedule.nextRun).getTime(),
+        executionsRemaining: Math.max(0, s.schedule.totalRuns - s.schedule.completedRuns),
+        totalExecuted:       s.schedule.completedRuns,
+        active:              s.active,
+        createdAt:           new Date(s.createdAt).getTime(),
+      }))
+
+    // ── Live memecoin positions → Positions panel ──
+    data.positions = getPositions(wallet)
+      .filter(p => p.status === 'open')
+      .map(p => ({
+        id:           p.id,
+        token:        p.token,
+        entryPrice:   p.entryPrice,
+        currentPrice: getCurrentPrice(p.token) ?? p.entryPrice,
+        amount:       p.entryPrice > 0 ? p.entryAmountUsd / p.entryPrice : 0,
+        stopLoss:     p.stopLoss,
+        profitTarget: p.profitTarget,
+        openedAt:     new Date(p.openedAt).getTime(),
+      }))
+
     res.json({ ok: true, data })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
