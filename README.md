@@ -37,6 +37,27 @@ Authentication is via zkLogin — your Google account generates a Sui wallet. No
 - **Scheduled swaps** — one-time swaps at a future date
 - **Conditional orders** — trigger actions when price crosses a threshold or health factor drops
 
+> **Operational note — the autonomous layer.** Conditional orders, scheduled
+> swaps/DCA, and Echo act *while you are offline*. On a serverless deployment this
+> behaviour is provided by three runtime services, configured through environment
+> rather than bundled in code:
+>
+> 1. **Durable state** — a Redis/KV store (`UPSTASH_REDIS_REST_URL` /
+>    `UPSTASH_REDIS_REST_TOKEN`). Serverless filesystems are ephemeral and per
+>    instance; without KV, schedules and conditions do not persist or coordinate
+>    across invocations.
+> 2. **A scheduler** — a cron calling `/api/cron/tick` (declared in `vercel.json`,
+>    authenticated by `CRON_SECRET`). This is what evaluates price triggers and
+>    fires due schedules; per-minute cadence requires a Vercel Pro plan or an
+>    external cron service.
+> 3. **Execution authority** — a deployed `session_auth` package plus an Echo
+>    session key (`VEKTOR_KEY_ENCRYPTION_SECRET`, `ECHO_WORKER_SECRET`), enabling
+>    execution within on-chain spend caps.
+>
+> Interactive intents — swap, lend, borrow, send, batch payment — execute
+> immediately at sign time and depend on none of the above. The autonomous layer
+> activates once these services are provisioned for the target deployment.
+
 ### Intelligence
 - **Guardian risk system** — every transaction is scored across 7 risk classes before you sign. Blocks dangerous trades; warns on high price impact, loose slippage, thin liquidity, large size
 - **Advice log** — Guardian recommendations from past swaps surface in the Advice tab
@@ -170,9 +191,19 @@ Open [http://localhost:5173](http://localhost:5173).
 | `GOOGLE_REDIRECT_URI` | Yes | OAuth callback URL |
 | `SESSION_SECRET` | Yes | Express session encryption key |
 | `VEKTOR_FUNDING_KEY` | Optional | Sui private key for onboarding faucet |
-| `SUI_PRIVATE_KEY` | Optional | Server-side key for scheduled auto-execution |
-| `VEKTOR_KEY_ENCRYPTION_SECRET` | Optional | AES-256 key for Echo session key encryption |
+| `SUI_PRIVATE_KEY` | Optional | Walrus storage signer; also server-side key for scheduled auto-execution |
+| `UPSTASH_REDIS_REST_URL` | Autonomy | Durable KV endpoint for schedules/conditions (also accepts `KV_REST_API_URL`) |
+| `UPSTASH_REDIS_REST_TOKEN` | Autonomy | Durable KV token (also accepts `KV_REST_API_TOKEN`) |
+| `CRON_SECRET` | Autonomy | Authenticates calls to `/api/cron/tick` |
+| `VEKTOR_KEY_ENCRYPTION_SECRET` | Autonomy | AES-256 key (base64, 32 bytes) for Echo session-key encryption |
+| `ECHO_WORKER_SECRET` | Autonomy | Authorises the scheduler to invoke Echo session-key execution |
+| `ECHO_REGISTRY_PACKAGE_ID` | Autonomy | Deployed `session_auth` package ID (server) |
+| `VITE_ECHO_PACKAGE_ID` | Autonomy | Deployed `session_auth` package ID (UI) |
 | `SMOKE_TEST_KEY` | Optional | Bypasses rate limits in integration tests |
+
+"Autonomy" variables are required only for the offline automation layer (see the
+operational note under [Features → Automation](#automation)); interactive intents
+do not need them.
 
 ---
 
