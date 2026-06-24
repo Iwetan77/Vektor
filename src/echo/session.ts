@@ -101,7 +101,13 @@ export async function loadSessionKeypair(
   }
 }
 
-/* ─── Build the SessionAuthorization PTB (to be signed by the main wallet) */
+/* ─── Build the SessionAuthorization PTB (to be signed by the main wallet) ───
+ * Returns the SERIALIZED transaction JSON (tx.serialize()), not built bytes.
+ * Building bytes server-side is impossible here: it needs a SuiClient to resolve
+ * gas coins and object versions, and the sender (the user's main wallet) isn't
+ * known until the browser rebuilds it. The frontend reconstructs this with
+ * Transaction.from(json), sets the sender to the signed-in address, builds, and
+ * signs — exactly the buildBytesFromPtbJson path the swap/send flows already use. */
 export async function buildSessionAuthPtb(opts: {
   packageId:    string
   sessionAddr:  string
@@ -109,7 +115,7 @@ export async function buildSessionAuthPtb(opts: {
   maxPerDay:    bigint
   expiresAt:    number   // epoch ms
   clockId?:     string
-}): Promise<string /* base64 PTB */> {
+}): Promise<string /* serialized PTB JSON */> {
   const { packageId, sessionAddr, maxPerTx, maxPerDay, expiresAt, clockId = '0x6' } = opts
 
   const tx = new Transaction()
@@ -125,8 +131,7 @@ export async function buildSessionAuthPtb(opts: {
     ],
   })
 
-  const bytes = await tx.build({ client: undefined as any })
-  return Buffer.from(bytes).toString('base64')
+  return tx.serialize()
 }
 
 /* ─── Verify a session auth object on-chain ──────────────────────────────── */

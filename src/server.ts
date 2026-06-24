@@ -2658,8 +2658,8 @@ app.post('/api/echo/:wallet/session-key', requireWalletSigOrZkLogin(), async (re
       : Buffer.from(secretKey as string, 'base64')
     await storeSessionKey(req.params.wallet, secretBytes)
 
-    // Build unsigned PTB for the user to sign with their main wallet
-    const ptbB64 = await buildSessionAuthPtb({
+    // Build unsigned PTB (serialized) for the user to sign with their main wallet
+    const ptbJson = await buildSessionAuthPtb({
       packageId,
       sessionAddr,
       maxPerTx:  limits.maxPerTx,
@@ -2671,7 +2671,7 @@ app.post('/api/echo/:wallet/session-key', requireWalletSigOrZkLogin(), async (re
       ok: true,
       sessionAddress: sessionAddr,
       expiresAt,
-      ptbB64,         // user must sign this with their main wallet
+      ptbJson,        // serialized PTB — frontend rebuilds with sender + signs
       limits: {
         maxPerTx:  limits.maxPerTx.toString(),
         maxPerDay: limits.maxPerDay.toString(),
