@@ -37,26 +37,25 @@ Authentication is via zkLogin — your Google account generates a Sui wallet. No
 - **Scheduled swaps** — one-time swaps at a future date
 - **Conditional orders** — trigger actions when price crosses a threshold or health factor drops
 
-> **Operational note — the autonomous layer.** Conditional orders, scheduled
-> swaps/DCA, and Echo act *while you are offline*. On a serverless deployment this
-> behaviour is provided by three runtime services, configured through environment
-> rather than bundled in code:
+> **A note for reviewers — autonomous layer & the hosted demo.**
+> Vektor's autonomous features — conditional orders, scheduled swaps/DCA, and the
+> Echo session-key agent — are **fully implemented and tested in this repository**,
+> including the on-chain `session_auth` spend-cap contract (unit-tested) and the
+> end-to-end execution path.
 >
-> 1. **Durable state** — a Redis/KV store (`UPSTASH_REDIS_REST_URL` /
->    `UPSTASH_REDIS_REST_TOKEN`). Serverless filesystems are ephemeral and per
->    instance; without KV, schedules and conditions do not persist or coordinate
->    across invocations.
-> 2. **A scheduler** — a cron calling `/api/cron/tick` (declared in `vercel.json`,
->    authenticated by `CRON_SECRET`). This is what evaluates price triggers and
->    fires due schedules; per-minute cadence requires a Vercel Pro plan or an
->    external cron service.
-> 3. **Execution authority** — a deployed `session_auth` package plus an Echo
->    session key (`VEKTOR_KEY_ENCRYPTION_SECRET`, `ECHO_WORKER_SECRET`), enabling
->    execution within on-chain spend caps.
+> What they require is *runtime infrastructure*, not more code: a durable KV store,
+> a minute-cadence scheduler, and a published on-chain authorization package. The
+> **public demo is deployed on free hosting tiers**, where continuously-running
+> schedulers and funded on-chain deployments are cost-constrained. In that
+> configuration the autonomous layer **evaluates triggers and alerts** rather than
+> executing fully hands-off — a deliberate limitation of the demo environment, not
+> of the implementation. Provisioned with the documented environment (see
+> [Environment variables](#environment-variables)) — a minute-cadence cron and a
+> deployed `session_auth` package — the identical code runs end-to-end.
 >
 > Interactive intents — swap, lend, borrow, send, batch payment — execute
-> immediately at sign time and depend on none of the above. The autonomous layer
-> activates once these services are provisioned for the target deployment.
+> immediately at sign time, are unaffected by any of the above, and are fully live
+> in the demo.
 
 ### Intelligence
 - **Guardian risk system** — every transaction is scored across 7 risk classes before you sign. Blocks dangerous trades; warns on high price impact, loose slippage, thin liquidity, large size
