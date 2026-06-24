@@ -2,7 +2,7 @@
 
 **Financial OS for Sui.** Swap, lend, send, and automate — in plain English. Sign in with Google. No seed phrase.
 
-Live: [vektor-ebon.vercel.app](https://vektor-ebon.vercel.app)
+Live: [vektor-sui.vercel.app](https://vektor-sui.vercel.app)
 
 ---
 
