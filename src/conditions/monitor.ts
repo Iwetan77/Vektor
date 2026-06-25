@@ -127,12 +127,27 @@ async function tryAutoExecute(cond: Condition, currentPrice: number): Promise<vo
 
   const privateKey = process.env.SUI_PRIVATE_KEY
   if (!privateKey) {
-    // No key — send a rich actionable alert
+    // No execution authority (no session key, no server key) — send an actionable
+    // alert. Where the condition's action is a concrete swap, attach a ready-to-run
+    // swap command so the UI shows a one-tap "Execute" button that drops the user
+    // straight into the Guardian review + sign flow (instead of a dead notice).
     const dir = cond.trigger.type === 'price_below' ? 'dropped below' : 'rose above'
+
+    const a          = cond.action
+    const swapAmount = a?.input_amount
+    const swapFrom   = (a?.input_asset ?? '').toUpperCase()
+    const swapTo     = (a?.output_goal ?? '').toUpperCase()
+    const execText   = swapAmount && swapFrom && swapTo
+      ? `swap ${swapAmount} ${swapFrom} for ${swapTo}`
+      : undefined
+
     addAlert(cond.wallet, {
       type:     'condition',
-      message:  `⚡ Condition triggered: ${cond.trigger.asset} has ${dir} $${cond.trigger.threshold}. Current price: $${currentPrice.toFixed(4)}. Open Vektor to execute.`,
+      message:  execText
+        ? `⚡ Condition met: ${cond.trigger.asset} ${dir} $${cond.trigger.threshold} (now $${currentPrice.toFixed(4)}). Tap Execute to ${execText}.`
+        : `⚡ Condition triggered: ${cond.trigger.asset} has ${dir} $${cond.trigger.threshold}. Current price: $${currentPrice.toFixed(4)}. Open Vektor to execute.`,
       severity: 'warning',
+      ...(execText ? { action: execText } : {}),
     })
     return
   }
